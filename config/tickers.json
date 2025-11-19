@@ -1,0 +1,11 @@
+{
+  "tickers": [
+    "CPNG",
+    "ORCL",
+    "COST",
+    "GOOG"
+  ],
+  "schedule_time": "06:00",
+  "timezone": "Asia/Seoul"
+}
+
