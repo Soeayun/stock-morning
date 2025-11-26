@@ -87,6 +87,7 @@ class SECDatabase:
                     url TEXT NOT NULL,
                     source VARCHAR(255),
                     published_at TIMESTAMP,
+                    content TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(ticker, url)
                 )
@@ -95,6 +96,13 @@ class SECDatabase:
                 CREATE INDEX IF NOT EXISTS idx_news_ticker_published
                 ON news(ticker, published_at)
             """)
+            try:
+                cursor.execute("SELECT content FROM news LIMIT 1")
+            except sqlite3.OperationalError:
+                cursor.execute("""
+                    ALTER TABLE news ADD COLUMN content TEXT
+                """)
+                print("news.content 컬럼을 추가했습니다.")
             
             conn.commit()
             print(f"데이터베이스 초기화 완료: {self.db_path}")
@@ -256,8 +264,8 @@ class SECDatabase:
                     cursor.execute(
                         """
                         INSERT OR IGNORE INTO news
-                        (ticker, title, summary, url, source, published_at)
-                        VALUES (?, ?, ?, ?, ?, ?)
+                        (ticker, title, summary, url, source, published_at, content)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             (item.get("ticker") or ticker).upper(),
@@ -266,6 +274,7 @@ class SECDatabase:
                             item.get("url"),
                             item.get("source"),
                             item.get("published_at"),
+                            item.get("content"),
                         )
                     )
                     if cursor.rowcount > 0:
@@ -303,6 +312,66 @@ class SECDatabase:
             cursor.execute(query, params)
             rows = cursor.fetchall()
             return [dict(row) for row in rows]
+
+    def get_news_without_content(
+        self,
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None,
+        limit: Optional[int] = None,
+        tickers: Optional[List[str]] = None,
+    ) -> List[Dict]:
+        """
+        본문이 비어 있는 뉴스 조회
+        """
+        params: List = []
+        conditions = ["(content IS NULL OR content = '')"]
+
+        if tickers:
+            placeholders = ",".join(["?"] * len(tickers))
+            conditions.append(f"UPPER(ticker) IN ({placeholders})")
+            params.extend([t.upper() for t in tickers])
+
+        if start_time and end_time:
+            conditions.append("published_at BETWEEN ? AND ?")
+            params.extend([start_time.isoformat(), end_time.isoformat()])
+
+        where_clause = " AND ".join(conditions)
+        query = f"""
+            SELECT * FROM news
+            WHERE {where_clause}
+            ORDER BY published_at DESC
+        """
+        if limit:
+            query += f" LIMIT {limit}"
+
+        with self.get_connection() as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+            return [dict(row) for row in rows]
+
+    def update_news_content(self, news_id: int, content: str) -> bool:
+        """
+        뉴스 본문 업데이트
+        """
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute(
+                    """
+                    UPDATE news
+                    SET content = ?
+                    WHERE id = ?
+                    """,
+                    (content, news_id),
+                )
+                conn.commit()
+                return cursor.rowcount > 0
+            except Exception as exc:
+                print(f"뉴스 본문 업데이트 실패 (id={news_id}): {exc}")
+                conn.rollback()
+                return False
     
     def get_filing_by_accession(self, accession_number: str) -> Optional[Dict]:
         """

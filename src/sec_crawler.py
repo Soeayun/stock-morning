@@ -6,18 +6,15 @@ SEC EDGAR 크롤러 모듈
 XML 파일은 나중에 파싱하여 LLM에 적합한 형식(마크다운 테이블 등)으로 변환 가능합니다.
 """
 
-from datetime import timezone
+import os
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
 import requests
 
 from src.db import SECDatabase
-from src.time_utils import (
-    KST,
-    get_last_24h_window,
-    parse_iso_datetime,
-)
+from src.time_utils import KST, parse_iso_datetime, get_last_24h_window
 
 
 class SECCrawler:
@@ -25,6 +22,7 @@ class SECCrawler:
     
     BASE_URL = "https://www.sec.gov"
     USER_AGENT = "ehddus416@korea.ac.kr"  # SEC 요구사항: 본인 정보로 변경 필요
+    WINDOW_DAYS = int(os.getenv("SEC_CRAWLER_WINDOW_DAYS", "90"))
     
     def __init__(self, user_agent: Optional[str] = None):
         """
@@ -32,6 +30,7 @@ class SECCrawler:
             user_agent: SEC API 사용 시 필요한 User-Agent (본인/회사 정보)
         """
         self.user_agent = user_agent or self.USER_AGENT
+        self.window_days = self.WINDOW_DAYS
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": self.user_agent})
     
@@ -93,7 +92,14 @@ class SECCrawler:
                 recent = data["filings"]["recent"]
                 
                 if recent and len(recent["form"]) > 0:
-                    window_start, window_end = get_last_24h_window() if only_today else (None, None)
+                    if only_today:
+                        if os.getenv("SEC_CRAWLER_WINDOW_DAYS"):
+                            window_end = datetime.now(KST)
+                            window_start = window_end - timedelta(days=self.window_days)
+                        else:
+                            window_start, window_end = get_last_24h_window()
+                    else:
+                        window_start, window_end = (None, None)
                     
                     # 당일 필터링이 필요한 경우
                     if only_today:

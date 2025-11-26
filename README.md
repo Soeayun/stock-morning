@@ -25,7 +25,7 @@ pip install -r requirements.txt
 
 ## ⚙️ 설정
 
-`config/tickers.json`에서 수집할 티커와 기본 스케줄을 지정합니다.
+`.env` 파일에 API 키와 LangSmith 설정을 적어두고, `config/tickers.json`에서 수집할 티커와 기본 스케줄을 지정합니다.
 
 ```json
 {
@@ -35,12 +35,45 @@ pip install -r requirements.txt
 }
 ```
 
+`.env` 예시:
+```
+OPENAI_API_KEY=sk-...
+LANGCHAIN_API_KEY=ls-...
+LANGCHAIN_PROJECT=stock-morning
+```
+
 ## 🚀 사용 방법
 
 - **SEC + 뉴스 동시 수집 & Agent 실행**
   ```bash
   python main.py
   ```
+
+- **멀티 에이전트 그래프**
+  ```bash
+  python run_multiagent.py --ticker GOOG
+  # 중간 에이전트 로그와 결론 출력
+  ```
+
+- **뉴스 본문 수집 (옵션)**  
+  Agent 입력에 기사 전문을 포함하고 싶다면, 수집 후 별도로 실행합니다.
+  ```bash
+  python fetch_news_content.py            # 전체 뉴스 대상
+  python fetch_news_content.py --hours 24 # 최근 24시간 뉴스만
+  ```
+
+- **AWS Yahoo Finance 뉴스 가져오기**
+  ```bash
+  python fetch_yahoo_articles.py --ticker GOOG --limit 5
+  # 결과 JSON은 aws_results/ 에 저장됩니다.
+  ```
+
+### 멀티 에이전트 (LangGraph 준비)
+- `multiagent/nodes/data_collector.py`가 AWS 뉴스 + 로컬 SEC 데이터를 수집하고,
+  뉴스/SEC/차트/거시 에이전트를 병렬로 실행합니다.
+- LangGraph 파이프라인은 `multiagent/graph.py`의 `run_multiagent_pipeline()`으로 실행할 수 있습니다.
+- `.env`에 `OPENAI_API_KEY`, `LANGCHAIN_API_KEY`(또는 `LANGSMITH_API_KEY`)를 넣어두면
+  LLM 요약과 LangSmith 추적이 자동으로 활성화됩니다.
 
 ## 🔄 실행 흐름 요약
 
