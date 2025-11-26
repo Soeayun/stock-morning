@@ -6,13 +6,18 @@ SEC EDGAR 크롤러 모듈
 XML 파일은 나중에 파싱하여 LLM에 적합한 형식(마크다운 테이블 등)으로 변환 가능합니다.
 """
 
+from datetime import timezone
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
 import requests
 
 from src.db import SECDatabase
-from src.time_utils import get_korea_batch_yesterday, utc_to_korea_batch_date
+from src.time_utils import (
+    KST,
+    get_last_24h_window,
+    parse_iso_datetime,
+)
 
 
 class SECCrawler:
@@ -68,7 +73,7 @@ class SECCrawler:
         
         Args:
             cik: CIK 번호
-            only_today: True면 어제 날짜 기준 공시만 반환 (오전 6시 실행 시 어제 06:00~오늘 05:59 공시)
+            only_today: True면 현재 시각 기준 직전 24시간 내 공시만 반환
             
         Returns:
             공시 정보 딕셔너리 (4개 메타데이터 + acceptanceDateTime 포함) 또는 None
@@ -88,49 +93,56 @@ class SECCrawler:
                 recent = data["filings"]["recent"]
                 
                 if recent and len(recent["form"]) > 0:
-                    # 한국 시간 기준 어제 날짜 (오전 6시에 실행 시 어제 06:00~오늘 05:59 공시 찾기) - 한 번만 계산
-                    target_date = get_korea_batch_yesterday() if only_today else None
+                    window_start, window_end = get_last_24h_window() if only_today else (None, None)
                     
                     # 당일 필터링이 필요한 경우
                     if only_today:
-                        # acceptanceDateTime이 있는 공시 중 어제 날짜 기준 것만 찾기
-                        # 예: 11/8 06:00 실행 → 11/7 날짜 공시 찾기 (11/7 06:00 ~ 11/8 05:59)
+                        # acceptanceDateTime이 있는 공시 중 지난 24시간 이내 것만 찾기
                         for idx in range(len(recent["form"])):
-                            if recent.get("acceptanceDateTime") and len(recent["acceptanceDateTime"]) > idx:
-                                acceptance_dt_str = recent["acceptanceDateTime"][idx]
-                                if acceptance_dt_str:
-                                    acceptance_date = utc_to_korea_batch_date(acceptance_dt_str)
-                                    if acceptance_date == target_date:
-                                        # 해당 날짜 공시 발견
-                                        filed_date = recent["filingDate"][idx]
-                                        reporting_for = (
-                                            recent["reportDate"][idx]
-                                            if recent.get("reportDate")
-                                            and len(recent["reportDate"]) > idx
-                                            else None
-                                        )
-                                        filing_info = {
-                                            "form": recent["form"][idx],
-                                            "filed": filed_date,
-                                            "filed_date": filed_date,
-                                            "reporting_for": reporting_for,
-                                            "filing_entity": data.get("name", ""),
-                                            "accession_number": recent["accessionNumber"][idx],
-                                            "acceptance_datetime": acceptance_dt_str,
-                                            "acceptance_date": acceptance_date,
-                                            "cik": cik
-                                        }
-                                        
-                                        print(f"해당 날짜 공시 발견:")
-                                        print(f"  Form: {filing_info['form']}")
-                                        print(f"  Filed: {filing_info['filed']}")
-                                        print(f"  Acceptance Date (한국): {filing_info['acceptance_date']}")
-                                        print(f"  Filing entity: {filing_info['filing_entity']}")
-                                        
-                                        return filing_info
+                            if not (recent.get("acceptanceDateTime") and len(recent["acceptanceDateTime"]) > idx):
+                                continue
+                            acceptance_dt_str = recent["acceptanceDateTime"][idx]
+                            if not acceptance_dt_str:
+                                continue
+                            acc_dt = parse_iso_datetime(acceptance_dt_str)
+                            if not acc_dt:
+                                continue
+                            if acc_dt.tzinfo is None:
+                                acc_dt = acc_dt.replace(tzinfo=timezone.utc)
+                            acc_kst = acc_dt.astimezone(KST)
+                            if not (window_start <= acc_kst < window_end):
+                                continue
+                            acceptance_date = acc_kst.date().isoformat()
+                            
+                            filed_date = recent["filingDate"][idx]
+                            reporting_for = (
+                                recent["reportDate"][idx]
+                                if recent.get("reportDate")
+                                and len(recent["reportDate"]) > idx
+                                else None
+                            )
+                            filing_info = {
+                                "form": recent["form"][idx],
+                                "filed": filed_date,
+                                "filed_date": filed_date,
+                                "reporting_for": reporting_for,
+                                "filing_entity": data.get("name", ""),
+                                "accession_number": recent["accessionNumber"][idx],
+                                "acceptance_datetime": acceptance_dt_str,
+                                "acceptance_date": acceptance_date,
+                                "cik": cik
+                            }
+                            
+                            print(f"해당 날짜 공시 발견:")
+                            print(f"  Form: {filing_info['form']}")
+                            print(f"  Filed: {filing_info['filed']}")
+                            print(f"  Acceptance Date (한국): {filing_info['acceptance_date']}")
+                            print(f"  Filing entity: {filing_info['filing_entity']}")
+                            
+                            return filing_info
                         
                         # 해당 날짜 공시 없음
-                        print(f"어제 날짜({target_date}) 기준 공시가 없습니다. (오전 6시 실행 시 어제 06:00~오늘 05:59 공시)")
+                        print("지난 24시간 내 공시가 없습니다.")
                         return None
                     
                     # 일단은 공시가 없더라도 최근 공시 정보를 추출할 수 있게 만듦
@@ -158,9 +170,14 @@ class SECCrawler:
                         if recent.get("acceptanceDateTime") and len(recent["acceptanceDateTime"]) > latest_idx:
                             acceptance_dt_str = recent["acceptanceDateTime"][latest_idx]
                             if acceptance_dt_str:
-                                acceptance_date = utc_to_korea_batch_date(acceptance_dt_str)
-                                filing_info["acceptance_datetime"] = acceptance_dt_str
-                                filing_info["acceptance_date"] = acceptance_date
+                                acc_dt = parse_iso_datetime(acceptance_dt_str)
+                                if acc_dt:
+                                    if acc_dt.tzinfo is None:
+                                        acc_dt = acc_dt.replace(tzinfo=timezone.utc)
+                                    acc_kst = acc_dt.astimezone(KST)
+                                    acceptance_date = acc_kst.date().isoformat()
+                                    filing_info["acceptance_datetime"] = acceptance_dt_str
+                                    filing_info["acceptance_date"] = acceptance_date
                         
                         print(f"최신 공시 발견:")
                         print(f"  Form: {filing_info['form']}")

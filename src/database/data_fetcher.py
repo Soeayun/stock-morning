@@ -1,13 +1,13 @@
 """
 데이터 조회 모듈
-로컬 SQLite DB에서 6시~6시 기준 데이터를 가져옵니다.
+로컬 SQLite DB에서 최근 24시간 기준 데이터를 가져옵니다.
 """
 
 from pathlib import Path
 from typing import Dict, List
 
 from src.db import SECDatabase
-from src.time_utils import get_korea_batch_window
+from src.time_utils import get_last_24h_window
 
 
 class DataFetcher:
@@ -37,8 +37,8 @@ class DataFetcher:
                 'sec_filings': List[Dict]  # SEC 파일 (메타 + 내용)
             }
         """
-        # 1. 시간 윈도우 계산 (어제 6시 ~ 오늘 6시)
-        start, end = get_korea_batch_window()
+        # 1. 시간 윈도우 계산 (최근 24시간)
+        start, end = get_last_24h_window()
         
         print(f"\n{'='*60}")
         print(f"[{ticker}] 데이터 조회 시작")

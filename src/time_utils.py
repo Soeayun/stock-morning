@@ -39,6 +39,17 @@ def get_korea_batch_window(
     return start, end
 
 
+def get_last_24h_window(
+    now: Optional[datetime] = None,
+) -> Tuple[datetime, datetime]:
+    """
+    현재 시각 기준 직전 24시간 구간(시작, 종료)을 반환합니다.
+    """
+    kst_now = _ensure_kst(now or datetime.now(KST))
+    start = kst_now - timedelta(hours=24)
+    return start, kst_now
+
+
 def get_korea_batch_yesterday(
     now: Optional[datetime] = None,
     base_hour: int = 6,
@@ -88,3 +99,8 @@ def utc_to_korea_batch_date(
             return dt.date().isoformat()
         except Exception:
             return datetime.now(KST).date().isoformat()
+
+
+def to_kst(dt: datetime) -> datetime:
+    """주어진 datetime을 KST로 변환"""
+    return _ensure_kst(dt)
