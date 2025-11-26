@@ -6,10 +6,11 @@ SEC EDGAR 크롤러 모듈
 XML 파일은 나중에 파싱하여 LLM에 적합한 형식(마크다운 테이블 등)으로 변환 가능합니다.
 """
 
-import requests
-import json
-from typing import Dict, Optional, Tuple
 from pathlib import Path
+from typing import Dict, Optional, Tuple
+
+import requests
+
 from src.db import SECDatabase
 from src.time_utils import get_korea_batch_yesterday, utc_to_korea_batch_date
 
@@ -26,8 +27,8 @@ class SECCrawler:
             user_agent: SEC API 사용 시 필요한 User-Agent (본인/회사 정보)
         """
         self.user_agent = user_agent or self.USER_AGENT
-        self.session = requests.Session() # HTTP 요청간에 연결을 재사용 (컴네)
-        self.session.headers.update({"User-Agent": self.user_agent}) # HTTP request header에 정보를 추가/ 변경 => User Agent를 모든 요청에 기본으로 넣어 차단하지 않도록
+        self.session = requests.Session()
+        self.session.headers.update({"User-Agent": self.user_agent})
     
     def get_cik_from_ticker(self, ticker: str) -> Optional[str]:
         """
@@ -101,10 +102,18 @@ class SECCrawler:
                                     acceptance_date = utc_to_korea_batch_date(acceptance_dt_str)
                                     if acceptance_date == target_date:
                                         # 해당 날짜 공시 발견
+                                        filed_date = recent["filingDate"][idx]
+                                        reporting_for = (
+                                            recent["reportDate"][idx]
+                                            if recent.get("reportDate")
+                                            and len(recent["reportDate"]) > idx
+                                            else None
+                                        )
                                         filing_info = {
                                             "form": recent["form"][idx],
-                                            "filed": recent["filingDate"][idx],
-                                            "reporting_for": recent["reportDate"][idx] if recent.get("reportDate") and len(recent["reportDate"]) > idx else None,
+                                            "filed": filed_date,
+                                            "filed_date": filed_date,
+                                            "reporting_for": reporting_for,
                                             "filing_entity": data.get("name", ""),
                                             "accession_number": recent["accessionNumber"][idx],
                                             "acceptance_datetime": acceptance_dt_str,
@@ -129,10 +138,17 @@ class SECCrawler:
                         # 가장 최근 공시 정보 추출
                         latest_idx = 0
                         
+                        filed_date = recent["filingDate"][latest_idx]
+                        reporting_for = (
+                            recent["reportDate"][latest_idx]
+                            if recent.get("reportDate") and len(recent["reportDate"]) > latest_idx
+                            else None
+                        )
                         filing_info = {
                             "form": recent["form"][latest_idx],
-                            "filed": recent["filingDate"][latest_idx],
-                            "reporting_for": recent["reportDate"][latest_idx] if recent.get("reportDate") and len(recent["reportDate"]) > latest_idx else None,
+                            "filed": filed_date,
+                            "filed_date": filed_date,
+                            "reporting_for": reporting_for,
                             "filing_entity": data.get("name", ""),
                             "accession_number": recent["accessionNumber"][latest_idx],
                             "cik": cik
@@ -228,7 +244,7 @@ class SECCrawler:
                     response = self.session.get(file_url)
                     if response.status_code == 200:
                         # 파일 저장
-                        download_dir = Path("downloads")
+                        download_dir = Path("downloads/sec_filings")
                         download_dir.mkdir(exist_ok=True)
                         
                         file_path = download_dir / f"{cik}_{accession_no_dash}_{filename}"
@@ -251,35 +267,25 @@ class SECCrawler:
             return None
     
     def crawl_latest_filing(
-        self, 
-        ticker: str, 
-        download_dir: Optional[Path] = None, 
+        self,
+        ticker: str,
         file_format: str = "xml",
         save_to_db: bool = True,
         db: Optional[SECDatabase] = None,
         only_today: bool = True
     ) -> Optional[Tuple[Dict, Path]]:
         """
-        티커를 입력받아 최신 공시 문서를 크롤링하고 파일을 다운로드합니다.
-        
-        표가 많은 공시자료의 경우 XML 형식을 권장합니다 (표 구조 보존).
-        acceptance_date 기준으로 필터링하므로, DB의 UNIQUE 제약조건(accession_number)으로 중복이 자동 방지됩니다.
+        티커를 입력받아 최신 공시 문서를 크롤링하고 로컬 DB에 저장합니다.
         
         Args:
             ticker: 주식 티커 심볼
-            download_dir: 다운로드 디렉토리 (기본값: downloads/)
             file_format: 다운로드할 파일 형식 ("xml", "html", "txt") - 기본값: "xml"
-            save_to_db: DB에 저장할지 여부 (기본값: True)
-            db: SECDatabase 인스턴스 (None이면 자동 생성)
-            only_today: True면 어제 날짜 기준 공시만 다운로드 (오전 6시 실행 시 어제 06:00~오늘 05:59 공시, 기본값: True)
+            save_to_db: SQLite에 저장할지 여부 (기본값: True)
+            only_today: True면 어제 날짜 기준 공시만 다운로드 (기본값: True)
             
         Returns:
-            (공시 메타데이터, 다운로드된 파일 경로) 튜플 또는 None
+            (공시 메타데이터, 로컬 파일 경로) 튜플 또는 None
         """
-        # DB 인스턴스 준비
-        if save_to_db and db is None:
-            db = SECDatabase()
-        
         # 1. 티커로 CIK 조회
         cik = self.get_cik_from_ticker(ticker)
         if not cik:
@@ -290,16 +296,7 @@ class SECCrawler:
         if not filing_info:
             return None
         
-        # 3. 중복 체크 (DB에 이미 있으면 파일 다운로드 건너뛰기)
-        if save_to_db and db:
-            if db.check_duplicate(filing_info.get("accession_number")):
-                print(f"이미 저장된 공시입니다: {filing_info.get('accession_number')}. 파일 다운로드를 건너뜁니다.")
-                return None
-        
-        # 4. 파일 다운로드 (기본값: XML - 표 구조 보존에 최적)
-        if download_dir:
-            Path(download_dir).mkdir(parents=True, exist_ok=True)
-        
+        # 3. 파일 다운로드 (임시)
         file_path = self.download_filing_file(
             cik=cik,
             accession_number=filing_info["accession_number"],
@@ -310,11 +307,27 @@ class SECCrawler:
         if not file_path:
             return None
         
-        # 5. DB에 저장 (옵션)
-        if save_to_db and db:
-            db.save_filing(ticker, filing_info, file_path)
+        # 4. 로컬 DB 저장
+        saved_metadata = filing_info
+        if save_to_db:
+            try:
+                metadata = {
+                    'ticker': ticker.upper(),
+                    'acceptance_date': filing_info.get('acceptance_date'),
+                    'accession_number': filing_info.get('accession_number'),
+                    'cik': cik,
+                    'form': filing_info.get('form'),
+                    'filed_date': filing_info.get('filed_date') or filing_info.get('filed'),
+                    'reporting_for': filing_info.get('reporting_for'),
+                    'file_format': file_format,
+                    'filing_entity': filing_info.get('filing_entity', ''),
+                }
+                database = db or SECDatabase()
+                database.save_filing(ticker, metadata, file_path)
+            except Exception as e:
+                print(f"❌ 로컬 DB 저장 실패: {e}")
         
-        return (filing_info, file_path)
+        return (saved_metadata, file_path)
 
 
 def main():

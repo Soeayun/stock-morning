@@ -24,6 +24,7 @@ env/
 
 # Downloaded files
 downloads/
+data/agent_results/
 
 # IDE
 .vscode/
@@ -46,4 +47,3 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.bak
-

@@ -1,10 +1,9 @@
 [project]
 name = "stock-morning"
-version = "0.1.0"
-description = "Add your description here"
+version = "0.2.0"
+description = "SEC filing crawler and stock data agent system"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.11"
 dependencies = [
     "requests>=2.31.0",
-    "apscheduler>=3.10.4",
 ]

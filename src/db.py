@@ -1,6 +1,6 @@
 """
 데이터베이스 모듈
-SEC EDGAR에서 다운로드한 공시 자료를 SQLite DB에 저장하고 관리합니다.
+SEC 공시 및 뉴스 데이터를 SQLite DB에 저장하고 관리합니다.
 """
 
 import hashlib
@@ -11,7 +11,7 @@ from datetime import datetime
 
 
 class SECDatabase:
-    """SEC 공시 자료를 저장하는 데이터베이스 클래스"""
+    """SEC 공시 및 뉴스 자료를 저장하는 데이터베이스 클래스"""
     
     def __init__(self, db_path: str = "sec_filings.db"):
         """
@@ -76,6 +76,25 @@ class SECDatabase:
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_accession_number ON filings(accession_number)
             """)
+
+            # 뉴스 테이블
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS news (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ticker VARCHAR(10) NOT NULL,
+                    title TEXT NOT NULL,
+                    summary TEXT,
+                    url TEXT NOT NULL,
+                    source VARCHAR(255),
+                    published_at TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(ticker, url)
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_news_ticker_published
+                ON news(ticker, published_at)
+            """)
             
             conn.commit()
             print(f"데이터베이스 초기화 완료: {self.db_path}")
@@ -120,6 +139,10 @@ class SECDatabase:
         # 중복 체크
         if self.check_duplicate(accession_number):
             print(f"이미 저장된 공시 자료입니다: {accession_number}")
+            try:
+                file_path.unlink(missing_ok=True)
+            except Exception:
+                pass
             return None
         
         # 파일 크기 계산
@@ -141,7 +164,7 @@ class SECDatabase:
                     filing_info.get("cik"),
                     accession_number,
                     filing_info.get("form"),
-                    filing_info.get("filed"),
+                    filing_info.get("filed_date") or filing_info.get("filed"),
                     filing_info.get("acceptance_date"),  # SEC에 올라온 날짜
                     filing_info.get("reporting_for"),
                     filing_info.get("filing_entity"),
@@ -190,6 +213,95 @@ class SECDatabase:
             cursor.execute(query, (ticker.upper(),))
             rows = cursor.fetchall()
             
+            return [dict(row) for row in rows]
+
+    def get_filings_between(
+        self,
+        ticker: str,
+        start_time: datetime,
+        end_time: datetime
+    ) -> List[Dict]:
+        """
+        특정 기간 동안의 공시 자료 조회
+        """
+        start_iso = start_time.date().isoformat()
+        end_iso = end_time.date().isoformat()
+        with self.get_connection() as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                SELECT * FROM filings
+                WHERE ticker = ?
+                  AND acceptance_date IS NOT NULL
+                  AND acceptance_date BETWEEN ? AND ?
+                ORDER BY acceptance_date DESC
+                """,
+                (ticker.upper(), start_iso, end_iso)
+            )
+            rows = cursor.fetchall()
+            return [dict(row) for row in rows]
+
+    def save_news_items(self, ticker: str, news_items: List[Dict]) -> int:
+        """
+        뉴스 데이터를 저장 (중복은 무시)
+        """
+        if not news_items:
+            return 0
+        inserted = 0
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            for item in news_items:
+                try:
+                    cursor.execute(
+                        """
+                        INSERT OR IGNORE INTO news
+                        (ticker, title, summary, url, source, published_at)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            (item.get("ticker") or ticker).upper(),
+                            item.get("title"),
+                            item.get("summary"),
+                            item.get("url"),
+                            item.get("source"),
+                            item.get("published_at"),
+                        )
+                    )
+                    if cursor.rowcount > 0:
+                        inserted += 1
+                except Exception as exc:
+                    print(f"❌ 뉴스 저장 실패: {exc}")
+            conn.commit()
+        return inserted
+
+    def get_news(
+        self,
+        ticker: str,
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None,
+        limit: Optional[int] = None
+    ) -> List[Dict]:
+        """
+        뉴스 데이터 조회
+        """
+        params: List = [ticker.upper()]
+        conditions = ["ticker = ?"]
+        if start_time and end_time:
+            conditions.append("published_at BETWEEN ? AND ?")
+            params.extend([start_time.isoformat(), end_time.isoformat()])
+        query = f"""
+            SELECT * FROM news
+            WHERE {' AND '.join(conditions)}
+            ORDER BY published_at DESC
+        """
+        if limit:
+            query += f" LIMIT {limit}"
+        with self.get_connection() as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
             return [dict(row) for row in rows]
     
     def get_filing_by_accession(self, accession_number: str) -> Optional[Dict]:

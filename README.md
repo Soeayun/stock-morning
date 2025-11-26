@@ -1,143 +1,91 @@
 # 📈 Stock Morning
 
-매일 아침 주요 기업의 SEC 공시와 컨퍼런스 콜 트랜스크립트를 자동으로 수집하는 크롤러입니다.
+매일 아침 주요 기업의 SEC 공시와 관련 뉴스를 동시에 수집하고, 로컬 데이터베이스에 저장한 뒤 Ticker별 Agent로 분석하는 시스템입니다. 모든 파이프라인은 로컬 SQLite DB를 사용하므로 AWS 계정 없이도 전체 흐름을 재현할 수 있습니다.
 
 ## 🎯 주요 기능
 
-- **SEC EDGAR 크롤러**: 기업 공시 자료(10-K, 10-Q, 8-K 등) 자동 수집
-- **Quartr 크롤러**: 컨퍼런스 콜 트랜스크립트 자동 수집
-- **자동 스케줄링**: 매일 오전 6시(KST) 자동 실행
-- **SQLite DB 저장**: 수집한 데이터를 로컬 DB에 체계적으로 저장
-- **중복 방지**: 이미 수집한 데이터는 자동으로 필터링
+- **SEC EDGAR 크롤러**: 기업 공시 자료(10-K, 10-Q, 8-K 등) 자동 다운로드
+- **뉴스 크롤러**: Google News RSS 기반 티커 관련 최신 뉴스 수집
+- **로컬 데이터베이스 저장**: 공시·뉴스 원본/메타데이터를 `sec_filings.db`에 보관
+- **6시~6시 배치 시스템**: 한국 시간 오전 6시 기준 데이터 창으로 Agent 실행
+- **Ticker별 Agent**: 각 기업 데이터 요약 및 JSON 결과 저장
 
 ## 📦 설치 방법
-
-### 1. 저장소 클론
 
 ```bash
 git clone https://github.com/YOUR_USERNAME/stock-morning.git
 cd stock-morning
-```
 
-### 2. 의존성 설치
-
-**UV 사용 (권장):**
-```bash
+# UV (권장)
 uv sync
-```
 
-**또는 pip 사용:**
-```bash
+# 또는 pip
 pip install -r requirements.txt
 ```
 
-### 3. 환경 설정
+## ⚙️ 설정
 
-티커 설정 파일 확인 및 수정:
-```bash
-# config/tickers.json
+`config/tickers.json`에서 수집할 티커와 기본 스케줄을 지정합니다.
+
+```json
 {
-  "tickers": ["CPNG", "ORCL", "COST", "GOOG"],
+  "tickers": ["NVDA", "MSFT", "TSLA"],
   "schedule_time": "06:00",
   "timezone": "Asia/Seoul"
 }
 ```
 
-### 4. API 키 설정 (Quartr 사용 시)
-
-```bash
-export QUARTR_API_KEY="your_api_key_here"
-```
-
 ## 🚀 사용 방법
 
-### 1. 수동 실행
-
-**SEC 크롤러만 실행:**
-```python
-# main.py에서
-run_sec()      # 주석 해제
-# run_quartr() # 주석 처리
-```
-
-```bash
-python main.py
-```
-
-**Quartr 크롤러만 실행:**
-```python
-# main.py에서
-# run_sec()    # 주석 처리
-run_quartr()   # 주석 해제
-```
-
-```bash
-python main.py
-```
-
-### 2. 즉시 한 번 실행
-
-```bash
-python run_scheduler.py --once
-```
-
-### 3. 자동 스케줄러 실행 (매일 오전 6시)
-
-```bash
-python run_scheduler.py
-```
+- **SEC + 뉴스 동시 수집 & Agent 실행**
+  ```bash
+  python main.py
+  ```
 
 ## 📁 프로젝트 구조
 
 ```
 stock-morning/
-├── main.py                 # 메인 실행 스크립트
-├── run_scheduler.py        # 스케줄러 실행 스크립트
+├── main.py                   # SEC+뉴스 수집 후 Agent 실행
 ├── config/
-│   └── tickers.json        # 크롤링 대상 티커 설정
+│   └── tickers.json          # 수집 대상 티커/시간
 ├── src/
-│   ├── sec_crawler.py      # SEC EDGAR 크롤러
-│   ├── quartr_crawler.py   # Quartr API 크롤러
-│   ├── db.py               # 데이터베이스 관리
-│   ├── scheduler.py        # 스케줄링 로직
-│   └── time_utils.py       # 시간 유틸리티
-├── downloads/              # 다운로드된 파일 저장 (gitignore)
-├── sec_filings.db          # SEC 공시 DB (gitignore)
-├── quartr_calls.db         # Quartr 컨퍼런스 콜 DB (gitignore)
-└── crawler.log             # 크롤링 로그 (gitignore)
+│   ├── config/settings.py    # 로컬 설정 로더
+│   ├── news_crawler.py       # 뉴스 크롤러 (Google News RSS)
+│   ├── sec_crawler.py        # SEC EDGAR 크롤러 (로컬 DB 저장)
+│   ├── database/data_fetcher.py # DB→Agent 데이터 수집
+│   ├── agents/base_agent.py  # Ticker별 Agent 기본 클래스
+│   ├── db.py                 # SQLite 관리 (공시 + 뉴스)
+│   └── time_utils.py         # 6시~6시 시간 계산
+└── data/
+    └── agent_results/        # Agent 결과 JSON
 ```
 
-## 🗃️ 데이터베이스 구조
+## 🗃️ 데이터 구조
 
-### SEC Filings
-- 티커, CIK, 공시 번호, 공시 형식
-- 제출 날짜, 수락 날짜
-- 파일 경로 및 메타데이터
-
-### Quartr Calls
-- 티커, 이벤트 ID
-- 컨퍼런스 콜 날짜 및 타입
-- 트랜스크립트 텍스트 및 파일 경로
+- **SQLite (`sec_filings.db`)**
+  - `filings`: SEC 공시 메타데이터 + 로컬 파일 경로
+  - `news`: 뉴스 제목/본문 요약/URL/발행 시각
+  - 추가로 Quartr 콜 저장소 등 확장 테이블 포함
+- **로컬 파일**
+  - `downloads/sec_filings/`: 다운로드한 SEC 원문(XML/HTML/TXT)
 
 ## 🔧 기술 스택
 
-- **Python 3.11+**
-- **SQLite3**: 로컬 데이터베이스
-- **Requests**: HTTP 요청
-- **APScheduler**: 작업 스케줄링
-- **SEC EDGAR API**: 공시 자료 수집
-- **Quartr API**: 컨퍼런스 콜 수집
-
+- Python 3.11+
+- Requests (HTTP)
+- SQLite (내장 DB)
+- SEC EDGAR submissions API + Google News RSS
 
 ## 📝 TODO
 
-- [ ] 이메일/슬랙 알림 기능 추가
-- [ ] 웹 대시보드 구현
-- [ ] 더 많은 데이터 소스 통합
-- [ ] 데이터 분석 및 시각화 기능
+- [x] 로컬 DB 기반 SEC + 뉴스 통합 수집
+- [x] 6시~6시 배치 데이터 조회
+- [x] Ticker별 Agent 결과 저장
+- [ ] Agent 브리핑 생성 기능 (LangGraph)
+- [ ] 고급 뉴스 분석/랭킹
+- [ ] 웹 대시보드/알림 채널
 
 ## 📄 라이선스
 
 MIT License
-
-
