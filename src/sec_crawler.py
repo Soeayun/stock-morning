@@ -9,12 +9,16 @@ XML 파일은 나중에 파싱하여 LLM에 적합한 형식(마크다운 테이
 import os
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple, List
 
 import requests
+from dotenv import load_dotenv
 
 from src.db import SECDatabase
 from src.time_utils import KST, parse_iso_datetime, get_last_24h_window
+
+# .env 환경변수 로드
+load_dotenv()
 
 
 class SECCrawler:
@@ -66,16 +70,16 @@ class SECCrawler:
             print(f"CIK 조회 중 오류 발생: {e}")
             return None
     
-    def get_latest_filing(self, cik: str, only_today: bool = False) -> Optional[Dict]:
+    def get_filings_in_window(self, cik: str, only_today: bool = False) -> List[Dict]:
         """
-        CIK로부터 최신 공시 정보를 조회합니다.
+        CIK로부터 기간 내 모든 공시 정보를 조회합니다.
         
         Args:
             cik: CIK 번호
             only_today: True면 현재 시각 기준 직전 24시간 내 공시만 반환
             
         Returns:
-            공시 정보 딕셔너리 (4개 메타데이터 + acceptanceDateTime 포함) 또는 None
+            공시 정보 딕셔너리 리스트
         """
         try:
             # SEC EDGAR submissions JSON API 사용
@@ -92,35 +96,33 @@ class SECCrawler:
                 recent = data["filings"]["recent"]
                 
                 if recent and len(recent["form"]) > 0:
+                    filings = []
                     if only_today:
                         if os.getenv("SEC_CRAWLER_WINDOW_DAYS"):
                             window_end = datetime.now(KST)
                             window_start = window_end - timedelta(days=self.window_days)
                         else:
                             window_start, window_end = get_last_24h_window()
-                    else:
-                        window_start, window_end = (None, None)
-                    
-                    # 당일 필터링이 필요한 경우
-                    if only_today:
-                        # acceptanceDateTime이 있는 공시 중 지난 24시간 이내 것만 찾기
+                        
                         for idx in range(len(recent["form"])):
-                            if not (recent.get("acceptanceDateTime") and len(recent["acceptanceDateTime"]) > idx):
-                                continue
-                            acceptance_dt_str = recent["acceptanceDateTime"][idx]
-                            if not acceptance_dt_str:
-                                continue
-                            acc_dt = parse_iso_datetime(acceptance_dt_str)
-                            if not acc_dt:
-                                continue
-                            if acc_dt.tzinfo is None:
-                                acc_dt = acc_dt.replace(tzinfo=timezone.utc)
-                            acc_kst = acc_dt.astimezone(KST)
-                            if not (window_start <= acc_kst < window_end):
-                                continue
-                            acceptance_date = acc_kst.date().isoformat()
-                            
+                            acceptance_dt_str = None
+                            acc_kst = None
+                            if recent.get("acceptanceDateTime") and len(recent["acceptanceDateTime"]) > idx:
+                                acceptance_dt_str = recent["acceptanceDateTime"][idx]
+                                if acceptance_dt_str:
+                                    acc_dt = parse_iso_datetime(acceptance_dt_str)
+                                    if acc_dt:
+                                        if acc_dt.tzinfo is None:
+                                            acc_dt = acc_dt.replace(tzinfo=timezone.utc)
+                                        acc_kst = acc_dt.astimezone(KST)
                             filed_date = recent["filingDate"][idx]
+                            candidate_dt = acc_kst or self._parse_filed_date(filed_date)
+                            if not candidate_dt:
+                                continue
+                            if not (window_start <= candidate_dt < window_end):
+                                continue
+                            acceptance_date = (acc_kst or candidate_dt).date().isoformat()
+                            
                             reporting_for = (
                                 recent["reportDate"][idx]
                                 if recent.get("reportDate")
@@ -134,28 +136,15 @@ class SECCrawler:
                                 "reporting_for": reporting_for,
                                 "filing_entity": data.get("name", ""),
                                 "accession_number": recent["accessionNumber"][idx],
-                                "acceptance_datetime": acceptance_dt_str,
+                                "acceptance_datetime": acceptance_dt_str or filed_date,
                                 "acceptance_date": acceptance_date,
                                 "cik": cik
                             }
-                            
-                            print(f"해당 날짜 공시 발견:")
-                            print(f"  Form: {filing_info['form']}")
-                            print(f"  Filed: {filing_info['filed']}")
-                            print(f"  Acceptance Date (한국): {filing_info['acceptance_date']}")
-                            print(f"  Filing entity: {filing_info['filing_entity']}")
-                            
-                            return filing_info
+                            filings.append(filing_info)
                         
-                        # 해당 날짜 공시 없음
-                        print("지난 24시간 내 공시가 없습니다.")
-                        return None
-                    
-                    # 일단은 공시가 없더라도 최근 공시 정보를 추출할 수 있게 만듦
+                        return filings
                     else:
-                        # 가장 최근 공시 정보 추출
                         latest_idx = 0
-                        
                         filed_date = recent["filingDate"][latest_idx]
                         reporting_for = (
                             recent["reportDate"][latest_idx]
@@ -171,8 +160,6 @@ class SECCrawler:
                             "accession_number": recent["accessionNumber"][latest_idx],
                             "cik": cik
                         }
-                        
-                        # acceptanceDateTime 추가 (있는 경우)
                         if recent.get("acceptanceDateTime") and len(recent["acceptanceDateTime"]) > latest_idx:
                             acceptance_dt_str = recent["acceptanceDateTime"][latest_idx]
                             if acceptance_dt_str:
@@ -184,23 +171,31 @@ class SECCrawler:
                                     acceptance_date = acc_kst.date().isoformat()
                                     filing_info["acceptance_datetime"] = acceptance_dt_str
                                     filing_info["acceptance_date"] = acceptance_date
-                        
-                        print(f"최신 공시 발견:")
-                        print(f"  Form: {filing_info['form']}")
-                        print(f"  Filed: {filing_info['filed']}")
-                        if "acceptance_date" in filing_info:
-                            print(f"  Acceptance Date (한국): {filing_info['acceptance_date']}")
-                        print(f"  Reporting for: {filing_info['reporting_for']}")
-                        print(f"  Filing entity: {filing_info['filing_entity']}")
-                        
-                        return filing_info
+                        return [filing_info]
             
-            print("최신 공시를 찾을 수 없습니다.")
-            return None
+            print("해당 조건에 맞는 공시를 찾을 수 없습니다.")
+            return []
             
         except Exception as e:
-            print(f"최신 공시 조회 중 오류 발생: {e}")
+            print(f"공시 조회 중 오류 발생: {e}")
+            return []
+
+    def _parse_filed_date(self, filed_str: Optional[str]) -> Optional[datetime]:
+        if not filed_str:
             return None
+        try:
+            dt = datetime.fromisoformat(filed_str)
+        except ValueError:
+            return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=KST)
+        else:
+            dt = dt.astimezone(KST)
+        return dt
+
+    def get_latest_filing(self, cik: str, only_today: bool = False) -> Optional[Dict]:
+        filings = self.get_filings_in_window(cik, only_today)
+        return filings[0] if filings else None
     
     def download_filing_file(self, cik: str, accession_number: str, form: str, file_format: str = "xml") -> Optional[Path]:
         """
@@ -289,6 +284,56 @@ class SECCrawler:
             print(f"파일 다운로드 중 오류 발생: {e}")
             return None
     
+    def crawl_filings_in_window(
+        self,
+        ticker: str,
+        file_format: str = "xml",
+        save_to_db: bool = True,
+        db: Optional[SECDatabase] = None,
+        only_today: bool = True
+    ) -> List[Tuple[Dict, Path]]:
+        filings: List[Tuple[Dict, Path]] = []
+
+        cik = self.get_cik_from_ticker(ticker)
+        if not cik:
+            return filings
+
+        filing_infos = self.get_filings_in_window(cik, only_today=only_today)
+        if not filing_infos:
+            return filings
+
+        for filing_info in filing_infos:
+            file_path = self.download_filing_file(
+                cik=cik,
+                accession_number=filing_info["accession_number"],
+                form=filing_info["form"],
+                file_format=file_format,
+            )
+            if not file_path:
+                continue
+
+            if save_to_db:
+                try:
+                    metadata = {
+                        "ticker": ticker.upper(),
+                        "acceptance_date": filing_info.get("acceptance_date"),
+                        "accession_number": filing_info.get("accession_number"),
+                        "cik": cik,
+                        "form": filing_info.get("form"),
+                        "filed_date": filing_info.get("filed_date") or filing_info.get("filed"),
+                        "reporting_for": filing_info.get("reporting_for"),
+                        "file_format": file_format,
+                        "filing_entity": filing_info.get("filing_entity", ""),
+                    }
+                    database = db or SECDatabase()
+                    database.save_filing(ticker, metadata, file_path)
+                except Exception as e:
+                    print(f"❌ 로컬 DB 저장 실패: {e}")
+
+            filings.append((filing_info, file_path))
+
+        return filings
+
     def crawl_latest_filing(
         self,
         ticker: str,
@@ -297,60 +342,14 @@ class SECCrawler:
         db: Optional[SECDatabase] = None,
         only_today: bool = True
     ) -> Optional[Tuple[Dict, Path]]:
-        """
-        티커를 입력받아 최신 공시 문서를 크롤링하고 로컬 DB에 저장합니다.
-        
-        Args:
-            ticker: 주식 티커 심볼
-            file_format: 다운로드할 파일 형식 ("xml", "html", "txt") - 기본값: "xml"
-            save_to_db: SQLite에 저장할지 여부 (기본값: True)
-            only_today: True면 어제 날짜 기준 공시만 다운로드 (기본값: True)
-            
-        Returns:
-            (공시 메타데이터, 로컬 파일 경로) 튜플 또는 None
-        """
-        # 1. 티커로 CIK 조회
-        cik = self.get_cik_from_ticker(ticker)
-        if not cik:
-            return None
-        
-        # 2. 최신 공시 정보 조회 (only_today 옵션 적용)
-        filing_info = self.get_latest_filing(cik, only_today=only_today)
-        if not filing_info:
-            return None
-        
-        # 3. 파일 다운로드 (임시)
-        file_path = self.download_filing_file(
-            cik=cik,
-            accession_number=filing_info["accession_number"],
-            form=filing_info["form"],
-            file_format=file_format
+        results = self.crawl_filings_in_window(
+            ticker=ticker,
+            file_format=file_format,
+            save_to_db=save_to_db,
+            db=db,
+            only_today=only_today,
         )
-        
-        if not file_path:
-            return None
-        
-        # 4. 로컬 DB 저장
-        saved_metadata = filing_info
-        if save_to_db:
-            try:
-                metadata = {
-                    'ticker': ticker.upper(),
-                    'acceptance_date': filing_info.get('acceptance_date'),
-                    'accession_number': filing_info.get('accession_number'),
-                    'cik': cik,
-                    'form': filing_info.get('form'),
-                    'filed_date': filing_info.get('filed_date') or filing_info.get('filed'),
-                    'reporting_for': filing_info.get('reporting_for'),
-                    'file_format': file_format,
-                    'filing_entity': filing_info.get('filing_entity', ''),
-                }
-                database = db or SECDatabase()
-                database.save_filing(ticker, metadata, file_path)
-            except Exception as e:
-                print(f"❌ 로컬 DB 저장 실패: {e}")
-        
-        return (saved_metadata, file_path)
+        return results[0] if results else None
 
 
 def main():

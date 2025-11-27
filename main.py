@@ -39,15 +39,15 @@ def run_sec_crawler(tickers: Optional[Iterable[str]] = None, only_today: bool = 
 
     for ticker in resolved:
         print(f"\n[{ticker}] SEC 크롤링 시작...")
-        result = sec_crawler.crawl_latest_filing(
+        results = sec_crawler.crawl_filings_in_window(
             ticker,
             save_to_db=True,
             db=db,
             only_today=only_today,
         )
-        if result:
-            metadata, file_path = result
-            print(f"✅ [{ticker}] SEC 성공: {metadata.get('form')} - {file_path}")
+        if results:
+            for metadata, file_path in results:
+                print(f"✅ [{ticker}] SEC 성공: {metadata.get('form')} - {file_path}")
         else:
             print(f"⚪ [{ticker}] 새로운 공시 없음")
 

@@ -8,8 +8,12 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List
 
+from dotenv import load_dotenv
+
 from src.db import SECDatabase
 from src.time_utils import get_last_24h_window, KST
+
+load_dotenv()
 
 
 class DataFetcher:
