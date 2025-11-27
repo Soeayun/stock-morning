@@ -23,18 +23,17 @@ def main():
 
     result = run_multiagent_pipeline(args.ticker)
 
-    print("\n" + "=" * 80)
-    print("--- Agent Outputs ---")
-    print("=" * 80)
-    for agent_output in result.get("agent_outputs", []):
-        print(f"[{agent_output.get('role')}] {agent_output.get('agent')}")
-        if "summaries" in agent_output:
-            for summary in agent_output["summaries"]:
-                headline = summary.get("title") or summary.get("form")
-                print(f"  - {headline}: {summary.get('summary')}")
-        else:
-            print("  (placeholder)")
-        print(f"  Opinion: {agent_output.get('opinion')}\n")
+    rounds = result.get("rounds", [])
+    for entry in rounds:
+        rid = entry.get("round")
+        header = "Blind Analysis" if rid == 1 else f"Debate Round {rid}"
+        print("\n" + "=" * 80)
+        print(f"--- {header} ---")
+        print("=" * 80)
+        print("[News Agent]")
+        print(entry.get("news"))
+        print("\n[SEC Agent]")
+        print(entry.get("sec"))
 
     print("\n" + "=" * 80)
     print("--- Debate Transcript ---")

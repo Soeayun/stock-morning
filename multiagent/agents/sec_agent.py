@@ -4,36 +4,35 @@ from typing import Any, Dict, List
 
 from .base_agent import BaseAgent
 from multiagent.services import AgentToolkit
-from multiagent.prompts import SEC_SUMMARY_PROMPT
+from multiagent.prompts import SEC_BLIND_PROMPT, SEC_REBUTTAL_PROMPT
 
 
 class SECAgent(BaseAgent):
-    """최근 24시간 SEC 공시를 요약하는 에이전트"""
+    """SEC 공시 기반 보수적 에이전트"""
 
     def __init__(self, toolkit: AgentToolkit, name: str = "SEC Analyst"):
         super().__init__(name=name, role="sec")
         self.toolkit = toolkit
 
-    def analyze(self, dataset: Dict[str, Any]) -> Dict[str, Any]:
-        filings: List[Dict[str, Any]] = dataset.get("sec_filings", [])
-        summaries = []
-        for filing in filings[:5]:
-            meta = filing.get("metadata", {})
-            form = meta.get("form")
-            filed_date = meta.get("filed_date") or meta.get("filed")
-            text = filing.get("content") or ""
-            summary_text = self.toolkit.summarize(text, SEC_SUMMARY_PROMPT)
-            summaries.append(
-                {
-                    "form": form,
-                    "filed_date": filed_date,
-                    "summary": summary_text,
-                }
-            )
+    def blind_assessment(self, dataset: Dict[str, Any]) -> str:
+        context = self._build_sec_context(dataset.get("sec_filings", []))
+        return self.toolkit.summarize(context, SEC_BLIND_PROMPT)
 
-        return {
-            "agent": self.name,
-            "role": self.role,
-            "summaries": summaries,
-            "opinion": "SEC 공시 요약이 완료되었습니다. Debate 단계에서 뉴스 의견과 비교 예정.",
-        }
+    def rebut(self, dataset: Dict[str, Any], opponent_statement: str) -> str:
+        context = self._build_sec_context(dataset.get("sec_filings", []))
+        instruction = SEC_REBUTTAL_PROMPT.format(opponent=opponent_statement)
+        return self.toolkit.summarize(context, instruction)
+
+    def _build_sec_context(self, filings: List[Dict[str, Any]]) -> str:
+        if not filings:
+            return "관련 SEC 공시 데이터가 없습니다."
+        chunks = []
+        for filing in filings[:10]:
+            meta = filing.get("metadata", {})
+            form = meta.get("form", "N/A")
+            filed = meta.get("filed_date") or meta.get("filed") or "N/A"
+            entity = meta.get("filing_entity", "")
+            text = filing.get("content") or ""
+            snippet = text[:1500]
+            chunks.append(f"[Form {form} | {filed} | {entity}]\n{snippet}")
+        return "\n\n".join(chunks)

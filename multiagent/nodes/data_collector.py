@@ -5,15 +5,13 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
-from concurrent.futures import ThreadPoolExecutor
+from typing import Dict, Optional
 
 from src.database.data_fetcher import DataFetcher
 from aws_fetchers.yahoo_news_fetcher import YahooNewsFetcher
 from multiagent.services import AgentToolkit
 from multiagent.agents.news_agent import NewsAgent
 from multiagent.agents.sec_agent import SECAgent
-from multiagent.agents.placeholder_agent import PlaceholderAgent
 
 
 def prepare_ticker_dataset(
@@ -46,22 +44,15 @@ def prepare_ticker_dataset(
         "sec_filings": sec_data.get("sec_filings"),
     }
 
-    dataset["agent_outputs"] = run_parallel_agents(dataset)
-    return dataset
-
-
-def run_parallel_agents(dataset: Dict[str, Any]) -> List[Dict[str, Any]]:
     toolkit = AgentToolkit()
-    agents = [
-        NewsAgent(toolkit),
-        SECAgent(toolkit),
-        PlaceholderAgent(name="Chart Analyst", role="chart"),
-        PlaceholderAgent(name="Macro Analyst", role="macro"),
-    ]
+    news_agent = NewsAgent(toolkit)
+    sec_agent = SECAgent(toolkit)
 
-    outputs: List[Dict[str, Any]] = []
-    with ThreadPoolExecutor(max_workers=len(agents)) as executor:
-        futures = [executor.submit(agent.analyze, dataset) for agent in agents]
-        for future in futures:
-            outputs.append(future.result())
-    return outputs
+    initial_news = news_agent.blind_assessment(dataset)
+    initial_sec = sec_agent.blind_assessment(dataset)
+
+    return {
+        "dataset": dataset,
+        "initial_news": initial_news,
+        "initial_sec": initial_sec,
+    }
