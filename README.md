@@ -5,10 +5,14 @@
 ## 🎯 주요 기능
 
 - **SEC EDGAR 크롤러**: 최근 24시간 동안 등록된 기업 공시 자료(10-K, 10-Q, 8-K 등) 자동 다운로드
-- **뉴스 크롤러**: Google News RSS 기반 티커 관련 최신 뉴스 수집
+- **AWS 뉴스 수집**: Yahoo Finance 뉴스를 AWS DynamoDB/S3에서 수집
 - **로컬 데이터베이스 저장**: 공시·뉴스 원본/메타데이터를 `sec_filings.db`에 보관
-- **분석 파이프라인**: 저장된 데이터를 Ticker별 Agent가 요약하고 JSON으로 기록
-- **Ticker별 Agent**: 각 기업 데이터 요약 및 JSON 결과 저장
+- **4명 전문가 토론 시스템**: 서로 다른 관점을 가진 4명의 AI 전문가가 같은 데이터를 분석하고 토론
+  - 💼 **Fundamental Analyst** (Charlie Munger 스타일): 재무제표와 비즈니스 모델 평가
+  - ⚠️ **Risk Manager** (Ray Dalio 스타일): 리스크 요인과 최악의 시나리오 분석
+  - 🚀 **Growth Catalyst Hunter** (Cathie Wood 스타일): 혁신과 성장 촉매 발굴
+  - 📊 **Market Sentiment Analyst** (George Soros 스타일): 시장 심리와 단기 트렌드 예측
+- **LangGraph 기반 토론 파이프라인**: 3라운드 토론 후 포트폴리오 매니저가 최종 결론 도출
 
 ## 📦 설치 방법
 
@@ -25,8 +29,8 @@ pip install -r requirements.txt
 
 ## ⚙️ 설정
 
-`.env` 파일에 API 키와 LangSmith 설정을 적어두고, `config/tickers.json`에서 수집할 티커와 기본 스케줄을 지정합니다.
-
+`config/tickers.json`에서 수집할 티커와 기본 스케줄을 지정합니다.
+ㅇ
 ```json
 {
   "tickers": ["NVDA", "MSFT", "TSLA"],
@@ -35,45 +39,26 @@ pip install -r requirements.txt
 }
 ```
 
-`.env` 예시:
-```
-OPENAI_API_KEY=sk-...
-LANGCHAIN_API_KEY=ls-...
-LANGCHAIN_PROJECT=stock-morning
-```
-
 ## 🚀 사용 방법
 
-- **SEC + 뉴스 동시 수집 & Agent 실행**
-  ```bash
-  python main.py
-  ```
+### 1. 데이터 수집 (SEC 공시)
+```bash
+python main.py
+```
 
-- **멀티 에이전트 그래프**
-  ```bash
-  python run_multiagent.py --ticker GOOG
-  # 중간 에이전트 로그와 결론 출력
-  ```
+### 2. 4명 전문가 토론 파이프라인 실행
+```bash
+# 기본 실행 (콘솔 출력만)
+python run_multiagent.py --ticker GOOG
 
-- **뉴스 본문 수집 (옵션)**  
-  Agent 입력에 기사 전문을 포함하고 싶다면, 수집 후 별도로 실행합니다.
-  ```bash
-  python fetch_news_content.py            # 전체 뉴스 대상
-  python fetch_news_content.py --hours 24 # 최근 24시간 뉴스만
-  ```
+# JSON 파일로 저장
+python run_multiagent.py --ticker AAPL --save
+```
 
-- **AWS Yahoo Finance 뉴스 가져오기**
-  ```bash
-  python fetch_yahoo_articles.py --ticker GOOG --limit 5
-  # 결과 JSON은 aws_results/ 에 저장됩니다.
-  ```
-
-### 멀티 에이전트 (LangGraph 준비)
-- `multiagent/nodes/data_collector.py`가 AWS 뉴스 + 로컬 SEC 데이터를 수집하고,
-  뉴스/SEC/차트/거시 에이전트를 병렬로 실행합니다.
-- LangGraph 파이프라인은 `multiagent/graph.py`의 `run_multiagent_pipeline()`으로 실행할 수 있습니다.
-- `.env`에 `OPENAI_API_KEY`, `LANGCHAIN_API_KEY`(또는 `LANGSMITH_API_KEY`)를 넣어두면
-  LLM 요약과 LangSmith 추적이 자동으로 활성화됩니다.
+**토론 흐름:**
+1. **Blind Analysis**: 각 전문가가 독립적으로 데이터 분석
+2. **Debate Round 1-2**: 서로의 의견을 듣고 반박/수정
+3. **Final Conclusion**: 포트폴리오 매니저가 종합 결론 도출 (BUY/SELL/HOLD 액션 포함)
 
 ## 🔄 실행 흐름 요약
 
@@ -124,9 +109,13 @@ stock-morning/
 
 - [x] 로컬 DB 기반 SEC + 뉴스 통합 수집
 - [x] 6시~6시 배치 데이터 조회
-- [x] Ticker별 Agent 결과 저장
-- [ ] Agent 브리핑 생성 기능 (LangGraph)
-- [ ] 고급 뉴스 분석/랭킹
+- [x] 4명 전문가 토론 파이프라인 (LangGraph)
+- [x] 페르소나 기반 프롬프트 엔지니어링 (Charlie Munger, Ray Dalio, Cathie Wood, George Soros 스타일)
+- [x] **최종 결론 JSON 구조화** (scores, action, position_size, confidence)
+- [x] **yfinance 통합** (실시간 주가, P/E, ROE, 부채비율 등 30+ 지표)
+- [x] **합의도 계산 & 동적 라운드 조정** (합의도 85% 이상 시 조기 종료)
+- [x] **에러 핸들링** (AWS/OpenAI 실패 시 재시도, fallback)
+- [ ] 최종 결론 기반 자동 거래 시그널 생성
 - [ ] 웹 대시보드/알림 채널
 
 ## 📄 라이선스

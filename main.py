@@ -1,12 +1,11 @@
 """
 메인 실행 스크립트
-SEC/뉴스 크롤러와 Agent 시스템을 관리합니다.
+SEC 크롤러와 Agent 시스템을 관리합니다.
 """
 
 from typing import Iterable, List, Optional
 
 from src.sec_crawler import SECCrawler
-from src.news_crawler import NewsCrawler
 from src.database.data_fetcher import DataFetcher
 from src.agents.base_agent import AgentManager
 from src.config.settings import get_settings
@@ -22,7 +21,7 @@ def _resolved_tickers(tickers: Optional[Iterable[str]]) -> List[str]:
 
 def run_sec_crawler(tickers: Optional[Iterable[str]] = None, only_today: bool = True):
     """
-    SEC + 뉴스 크롤러 실행 (로컬 DB 저장)
+    SEC 크롤러 실행 (로컬 DB 저장)
     """
     resolved = _resolved_tickers(tickers)
     if not resolved:
@@ -30,11 +29,10 @@ def run_sec_crawler(tickers: Optional[Iterable[str]] = None, only_today: bool = 
         return
 
     print("\n" + "=" * 60)
-    print("SEC/뉴스 크롤러 실행")
+    print("SEC 크롤러 실행")
     print("=" * 60)
 
     sec_crawler = SECCrawler()
-    news_crawler = NewsCrawler()
     db = SECDatabase()
 
     for ticker in resolved:
@@ -51,13 +49,8 @@ def run_sec_crawler(tickers: Optional[Iterable[str]] = None, only_today: bool = 
         else:
             print(f"⚪ [{ticker}] 새로운 공시 없음")
 
-        print(f"[{ticker}] 뉴스 크롤링 시작...")
-        articles = news_crawler.fetch_news(ticker)
-        inserted = db.save_news_items(ticker, articles) if articles else 0
-        print(f"📰 [{ticker}] 뉴스 {inserted}/{len(articles) if articles else 0}건 저장")
-
     print("\n" + "=" * 60)
-    print("SEC/뉴스 크롤러 실행 완료")
+    print("SEC 크롤러 실행 완료")
     print("=" * 60)
 
 

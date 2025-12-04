@@ -10,8 +10,11 @@ from typing import Dict, Optional
 from src.database.data_fetcher import DataFetcher
 from aws_fetchers.yahoo_news_fetcher import YahooNewsFetcher
 from multiagent.services import AgentToolkit
-from multiagent.agents.news_agent import NewsAgent
-from multiagent.agents.sec_agent import SECAgent
+from multiagent.services.market_data import MarketDataFetcher
+from multiagent.agents.fundamental_analyst import FundamentalAnalyst
+from multiagent.agents.risk_manager import RiskManager
+from multiagent.agents.growth_analyst import GrowthAnalyst
+from multiagent.agents.sentiment_analyst import SentimentAnalyst
 
 
 def prepare_ticker_dataset(
@@ -29,30 +32,60 @@ def prepare_ticker_dataset(
     end_time = datetime.now(timezone.utc)
     start_time = end_time - timedelta(hours=hours)
 
-    # 1) AWS에서 뉴스 가져오기
-    yahoo_fetcher = YahooNewsFetcher()
-    aws_news = yahoo_fetcher.fetch(ticker_upper, limit=news_limit or 5)
+    # 1) AWS에서 뉴스 가져오기 (에러 핸들링)
+    aws_news = []
+    try:
+        yahoo_fetcher = YahooNewsFetcher()
+        aws_news = yahoo_fetcher.fetch(ticker_upper, limit=news_limit or 5)
+    except Exception as exc:
+        print(f"⚠️  [{ticker_upper}] AWS 뉴스 수집 실패: {exc}")
+        aws_news = []
 
     # 2) 로컬 SEC 데이터 (최근 24시간)
     fetcher = DataFetcher()
     sec_data = fetcher.fetch_ticker_data(ticker_upper, include_file_content=True)
+
+    # 3) 실시간 시장 데이터 (yfinance) - 에러 핸들링
+    market_data = None
+    market_data_text = ""
+    try:
+        market_fetcher = MarketDataFetcher()
+        market_data = market_fetcher.fetch_market_data(ticker_upper)
+        market_data_text = market_fetcher.format_market_data_for_prompt(market_data)
+        
+        if market_data and market_data.current_price:
+            print(f"💰 [{ticker_upper}] 현재 주가: ${market_data.current_price:,.2f}")
+    except Exception as exc:
+        print(f"⚠️  [{ticker_upper}] 시장 데이터 수집 실패: {exc}")
+        market_data = None
+        market_data_text = "시장 데이터를 가져올 수 없습니다."
 
     dataset = {
         "ticker": ticker_upper,
         "period": sec_data.get("period"),
         "aws_news": aws_news,
         "sec_filings": sec_data.get("sec_filings"),
+        "market_data": market_data,
+        "market_data_text": market_data_text,
     }
 
+    # 4명의 전문가 초기화
     toolkit = AgentToolkit()
-    news_agent = NewsAgent(toolkit)
-    sec_agent = SECAgent(toolkit)
+    fundamental = FundamentalAnalyst(toolkit)
+    risk = RiskManager(toolkit)
+    growth = GrowthAnalyst(toolkit)
+    sentiment = SentimentAnalyst(toolkit)
 
-    initial_news = news_agent.blind_assessment(dataset)
-    initial_sec = sec_agent.blind_assessment(dataset)
+    # 각 전문가의 초기 분석 (Blind Assessment)
+    initial_fundamental = fundamental.blind_assessment(dataset)
+    initial_risk = risk.blind_assessment(dataset)
+    initial_growth = growth.blind_assessment(dataset)
+    initial_sentiment = sentiment.blind_assessment(dataset)
 
     return {
         "dataset": dataset,
-        "initial_news": initial_news,
-        "initial_sec": initial_sec,
+        "initial_fundamental": initial_fundamental,
+        "initial_risk": initial_risk,
+        "initial_growth": initial_growth,
+        "initial_sentiment": initial_sentiment,
     }
