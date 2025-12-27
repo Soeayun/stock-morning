@@ -1,20 +1,32 @@
 # 📈 Stock Morning
 
-매 시점 실행 시 최근 24시간 동안의 주요 기업 SEC 공시와 관련 뉴스를 자동으로 수집하고, 로컬 데이터베이스에 저장한 뒤 Ticker별 Agent로 분석하는 시스템입니다. 모든 파이프라인은 로컬 SQLite DB를 사용하므로 AWS 계정 없이도 전체 흐름을 재현할 수 있습니다.
+**4명의 AI 전문가가 토론하는 주식 분석 파이프라인**
+
+SEC 공시와 최신 뉴스를 자동으로 수집하고, 4명의 AI 전문가가 서로 다른 관점에서 토론한 뒤 투자 결론을 도출합니다. 최종 결과는 **팟캐스트 대본 형식**으로 출력되어 바로 영상/발표에 활용할 수 있습니다.
 
 ## 🎯 주요 기능
 
-- **SEC EDGAR 크롤러**: 최근 24시간 동안 등록된 기업 공시 자료(10-K, 10-Q, 8-K 등) 자동 다운로드
-- **AWS 뉴스 수집**: Yahoo Finance 뉴스를 AWS DynamoDB/S3에서 수집
-- **로컬 데이터베이스 저장**: 공시·뉴스 원본/메타데이터를 `sec_filings.db`에 보관
-- **4명 전문가 토론 시스템**: 서로 다른 관점을 가진 4명의 AI 전문가가 같은 데이터를 분석하고 토론
-  - 💼 **Fundamental Analyst** (Charlie Munger 스타일): 재무제표와 비즈니스 모델 평가
-  - ⚠️ **Risk Manager** (Ray Dalio 스타일): 리스크 요인과 최악의 시나리오 분석
-  - 🚀 **Growth Catalyst Hunter** (Cathie Wood 스타일): 혁신과 성장 촉매 발굴
-  - 📊 **Market Sentiment Analyst** (George Soros 스타일): 시장 심리와 단기 트렌드 예측
-- **LangGraph 기반 토론 파이프라인**: 3라운드 토론 후 포트폴리오 매니저가 최종 결론 도출
+### 📥 데이터 수집
+- **SEC EDGAR 크롤러**: 10-K, 10-Q, 8-K, Form 4 등 자동 다운로드
+- **Yahoo Finance 뉴스**: AWS DynamoDB에서 최신 뉴스 10건 수집
+- **실시간 주가**: yfinance 통합 (P/E, ROE, 부채비율 등 30+ 지표)
 
-## 📦 설치 방법
+### 🤖 4명 전문가 토론 시스템
+| 전문가 | 스타일 | 역할 |
+|--------|--------|------|
+| 💼 **Fundamental Analyst** | Charlie Munger | 재무제표와 비즈니스 모델 평가 |
+| ⚠️ **Risk Manager** | Ray Dalio | 리스크 요인과 최악의 시나리오 분석 |
+| 🚀 **Growth Analyst** | Cathie Wood | 혁신과 성장 촉매 발굴 |
+| 📊 **Sentiment Analyst** | George Soros | 시장 심리와 뉴스 분석 |
+
+### 📝 출력 형식
+- **팟캐스트 대본**: 자연스러운 줄글로 바로 영상/발표에 사용 가능
+- **구조화된 분석**: 매수 근거, 리스크, 실행 전략
+- **JSON 결과**: 프로그래밍 활용 가능
+
+## 🚀 빠른 시작
+
+### 1. 설치
 
 ```bash
 git clone https://github.com/YOUR_USERNAME/stock-morning.git
@@ -22,101 +34,145 @@ cd stock-morning
 
 # UV (권장)
 uv sync
-
-# 또는 pip
-pip install -r requirements.txt
 ```
 
-## ⚙️ 설정
+### 2. 환경변수 설정
 
-`config/tickers.json`에서 수집할 티커와 기본 스케줄을 지정합니다.
-ㅇ
-```json
-{
-  "tickers": ["NVDA", "MSFT", "TSLA"],
-  "schedule_time": "06:00",
-  "timezone": "Asia/Seoul"
-}
-```
+`.env` 파일 생성:
 
-## 🚀 사용 방법
-
-### 1. 데이터 수집 (SEC 공시)
 ```bash
-python main.py
+# OpenAI API (필수)
+OPENAI_API_KEY=sk-...
+
+# AWS (뉴스 수집용)
+AWS_ACCESS_KEY_ID=...
+AWS_SECRET_ACCESS_KEY=...
+AWS_DEFAULT_REGION=ap-northeast-2
+
+# LangSmith 추적 (선택)
+LANGCHAIN_TRACING_V2=true
+LANGCHAIN_API_KEY=...
+LANGCHAIN_PROJECT=stock-morning
 ```
 
-### 2. 4명 전문가 토론 파이프라인 실행
+### 3. 실행
+
 ```bash
-# 기본 실행 (콘솔 출력만)
-python run_multiagent.py --ticker GOOG
+# 전체 파이프라인 (크롤링 + 분석)
+uv run run.py --ticker GOOG
 
-# JSON 파일로 저장
-python run_multiagent.py --ticker AAPL --save
+# 크롤링 생략 (기존 데이터 사용)
+uv run run.py --ticker GOOG --skip-crawl
+
+# 결과 JSON 저장
+uv run run.py --ticker GOOG --save
 ```
 
-**토론 흐름:**
-1. **Blind Analysis**: 각 전문가가 독립적으로 데이터 분석
-2. **Debate Round 1-2**: 서로의 의견을 듣고 반박/수정
-3. **Final Conclusion**: 포트폴리오 매니저가 종합 결론 도출 (BUY/SELL/HOLD 액션 포함)
+## 📊 실행 결과 예시
 
-## 🔄 실행 흐름 요약
+```
+====================================================================================================
+🚀 STOCK MORNING - 통합 분석 파이프라인
+📊 Ticker: GOOG
+====================================================================================================
 
-1. `main.py` → `config/settings.py`에서 티커 목록을 불러옵니다.
-2. `run_sec_crawler()`  
-   - `src/sec_crawler.SECCrawler`: 각 티커의 최신 24시간 SEC 공시를 다운로드 후 `sec_filings.db` + `downloads/sec_filings/`에 저장  
-   - `src/news_crawler.NewsCrawler`: Google News RSS에서 기사 최대 10건을 수집하고, URL 정규화 후 DB에 저장
-3. `run_agents()`  
-   - `src/database/data_fetcher.DataFetcher`: DB에서 “현재 시각 기준 직전 24시간”의 뉴스·공시를 조회  
-   - `src/agents/base_agent.AgentManager`: 티커별 요약을 수행하고 `data/agent_results/`에 JSON으로 기록
+📥 SEC 크롤링: 16건 (10-K: ✅, 10-Q: ✅)
+✅ 뉴스 수집: 10건
+
+🎯 4-EXPERT DEBATE PIPELINE
+├── Round 1: Blind Analysis (각 전문가 독립 분석)
+├── Round 2: Guided Debate (중재자 가이드 기반 토론)
+├── Round 3: Guided Debate (쟁점 심화 토론)
+└── Final: 최종 결론 도출
+
+📋 FINAL CONCLUSION
+────────────────────────────────────────
+오늘 분석한 구글(Alphabet Inc.)에 대해 최종 결론을 말씀드리겠습니다.
+최근 제출된 10-Q(2025-10-30)에 따르면 영업이익률이 30%를 유지하고 있고...
+────────────────────────────────────────
+
+⚪ 최종 판단: HOLD (5%)
+🧹 임시 파일 정리 완료
+
+✨ PIPELINE COMPLETED
+```
 
 ## 📁 프로젝트 구조
 
 ```
 stock-morning/
-├── main.py                   # SEC+뉴스 수집 후 Agent 실행
+├── run.py                    # 📌 메인 실행 스크립트
+├── multiagent/               # 4명 전문가 토론 시스템
+│   ├── graph.py              # LangGraph 파이프라인
+│   ├── agents/               # 4명 전문가 + 중재자
+│   │   ├── fundamental_analyst.py
+│   │   ├── risk_manager.py
+│   │   ├── growth_analyst.py
+│   │   ├── sentiment_analyst.py
+│   │   └── moderator.py
+│   ├── services/             # 공용 서비스
+│   │   ├── toolkit.py        # LLM 호출 (GPT-5.1)
+│   │   └── conclusion_parser.py
+│   ├── prompts.py            # 프롬프트 템플릿
+│   └── schemas.py            # Pydantic 스키마
+├── src/                      # 데이터 수집
+│   ├── sec_crawler.py        # SEC EDGAR 크롤러
+│   ├── db.py                 # SQLite 관리
+│   ├── database/
+│   │   └── data_fetcher.py   # 데이터 조회
+│   └── config/settings.py    # 설정
+├── aws_fetchers/             # AWS 뉴스 수집
+│   ├── yahoo_fetcher.py
+│   └── news_saver.py
 ├── config/
-│   └── tickers.json          # 수집 대상 티커/시간
-├── src/
-│   ├── config/settings.py    # 로컬 설정 로더
-│   ├── news_crawler.py       # 뉴스 크롤러 (Google News RSS)
-│   ├── sec_crawler.py        # SEC EDGAR 크롤러 (로컬 DB 저장)
-│   ├── database/data_fetcher.py # DB→Agent 데이터 수집
-│   ├── agents/base_agent.py  # Ticker별 Agent 기본 클래스
-│   ├── db.py                 # SQLite 관리 (공시 + 뉴스)
-│   └── time_utils.py         # 24시간 윈도우 계산/변환
-└── data/
-    └── agent_results/        # Agent 결과 JSON
+│   └── tickers.json          # 티커 목록
+└── downloads/
+    └── sec_filings/          # SEC 공시 원문
 ```
-
-## 🗃️ 데이터 구조
-
-- **SQLite (`sec_filings.db`)**
-  - `filings`: SEC 공시 메타데이터 + 로컬 파일 경로
-  - `news`: 뉴스 제목/본문 요약/URL/발행 시각
-  - 추가로 Quartr 콜 저장소 등 확장 테이블 포함
-- **로컬 파일**
-  - `downloads/sec_filings/`: 다운로드한 SEC 원문(XML/HTML/TXT)
 
 ## 🔧 기술 스택
 
-- Python 3.11+
-- Requests (HTTP)
-- SQLite (내장 DB)
-- SEC EDGAR submissions API + Google News RSS
+| 카테고리 | 기술 |
+|----------|------|
+| **LLM** | OpenAI GPT-5.1 |
+| **오케스트레이션** | LangGraph |
+| **데이터베이스** | SQLite |
+| **SEC 데이터** | SEC EDGAR API |
+| **뉴스** | Yahoo Finance (AWS DynamoDB) |
+| **주가 데이터** | yfinance |
+| **추적** | LangSmith (선택) |
 
-## 📝 TODO
+## ⚙️ 설정
 
-- [x] 로컬 DB 기반 SEC + 뉴스 통합 수집
-- [x] 6시~6시 배치 데이터 조회
-- [x] 4명 전문가 토론 파이프라인 (LangGraph)
-- [x] 페르소나 기반 프롬프트 엔지니어링 (Charlie Munger, Ray Dalio, Cathie Wood, George Soros 스타일)
-- [x] **최종 결론 JSON 구조화** (scores, action, position_size, confidence)
-- [x] **yfinance 통합** (실시간 주가, P/E, ROE, 부채비율 등 30+ 지표)
-- [x] **합의도 계산 & 동적 라운드 조정** (합의도 85% 이상 시 조기 종료)
-- [x] **에러 핸들링** (AWS/OpenAI 실패 시 재시도, fallback)
-- [ ] 최종 결론 기반 자동 거래 시그널 생성
-- [ ] 웹 대시보드/알림 채널
+### 티커 설정 (`config/tickers.json`)
+
+```json
+{
+  "tickers": ["GOOG", "AAPL", "MSFT", "NVDA"],
+  "schedule_time": "06:00",
+  "timezone": "Asia/Seoul"
+}
+```
+
+### SEC 크롤링 윈도우
+
+```bash
+# .env에서 설정 (기본값: 10일)
+SEC_CRAWLER_WINDOW_DAYS=10
+```
+
+## 📝 커맨드 옵션
+
+```bash
+uv run run.py --help
+
+옵션:
+  --ticker TICKER     분석할 티커 (필수)
+  --skip-crawl        SEC 크롤링 생략
+  --crawl-only        크롤링만 실행
+  --save              결과 JSON 저장
+  --output-dir DIR    저장 디렉토리 (기본: data/agent_results)
+```
 
 ## 📄 라이선스
 

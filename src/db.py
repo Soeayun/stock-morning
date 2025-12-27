@@ -250,6 +250,43 @@ class SECDatabase:
             rows = cursor.fetchall()
             return [dict(row) for row in rows]
 
+    def get_latest_annual_quarterly(self, ticker: str) -> Dict[str, Dict]:
+        """
+        가장 최근 10-K (연간보고서)와 10-Q (분기보고서)를 가져옴
+        
+        Returns:
+            {'10-K': {...} or None, '10-Q': {...} or None}
+        """
+        result = {'10-K': None, '10-Q': None}
+        
+        with self.get_connection() as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            
+            # 가장 최근 10-K
+            cursor.execute("""
+                SELECT * FROM filings 
+                WHERE ticker = ? AND form = '10-K'
+                ORDER BY filed_date DESC
+                LIMIT 1
+            """, (ticker.upper(),))
+            row = cursor.fetchone()
+            if row:
+                result['10-K'] = dict(row)
+            
+            # 가장 최근 10-Q
+            cursor.execute("""
+                SELECT * FROM filings 
+                WHERE ticker = ? AND form = '10-Q'
+                ORDER BY filed_date DESC
+                LIMIT 1
+            """, (ticker.upper(),))
+            row = cursor.fetchone()
+            if row:
+                result['10-Q'] = dict(row)
+        
+        return result
+
     def save_news_items(self, ticker: str, news_items: List[Dict]) -> int:
         """
         뉴스 데이터를 저장 (중복은 무시)

@@ -38,7 +38,7 @@ class YahooNewsFetcher:
     def fetch(
         self,
         ticker: str,
-        limit: int = 5,
+        limit: int = 10,
     ) -> List[Dict]:
         """
         DynamoDB에서 ticker에 해당하는 최신 뉴스 limit개를 가져오고,

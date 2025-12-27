@@ -290,7 +290,8 @@ class SECCrawler:
         file_format: str = "xml",
         save_to_db: bool = True,
         db: Optional[SECDatabase] = None,
-        only_today: bool = True
+        only_today: bool = True,
+        include_annual_quarterly: bool = True  # 10-K, 10-Q 항상 포함
     ) -> List[Tuple[Dict, Path]]:
         filings: List[Tuple[Dict, Path]] = []
 
@@ -332,7 +333,107 @@ class SECCrawler:
 
             filings.append((filing_info, file_path))
 
+        # 10-K, 10-Q 항상 포함 (기간 외 최신 것도)
+        if include_annual_quarterly:
+            existing_accessions = {f[0].get("accession_number") for f in filings}
+            annual_quarterly = self.crawl_latest_annual_quarterly(
+                ticker=ticker,
+                file_format=file_format,
+                save_to_db=save_to_db,
+                db=db
+            )
+            for form_type in ['10-K', '10-Q']:
+                if annual_quarterly.get(form_type):
+                    filing_info, file_path = annual_quarterly[form_type]
+                    if filing_info.get("accession_number") not in existing_accessions:
+                        filings.insert(0, (filing_info, file_path))
+
         return filings
+
+    def crawl_latest_annual_quarterly(
+        self,
+        ticker: str,
+        file_format: str = "xml",
+        save_to_db: bool = True,
+        db: Optional[SECDatabase] = None
+    ) -> Dict[str, Optional[Tuple[Dict, Path]]]:
+        """
+        가장 최근 10-K (연간보고서)와 10-Q (분기보고서)를 크롤링
+        기간과 관계없이 가장 최신 것을 가져옴
+        
+        Returns:
+            {'10-K': (filing_info, file_path) or None, '10-Q': (filing_info, file_path) or None}
+        """
+        result = {'10-K': None, '10-Q': None}
+        
+        cik = self.get_cik_from_ticker(ticker)
+        if not cik:
+            return result
+        
+        try:
+            # SEC EDGAR submissions JSON API 사용
+            cik_padded = cik.zfill(10)
+            submissions_json_url = f"https://data.sec.gov/submissions/CIK{cik_padded}.json"
+            response = self.session.get(submissions_json_url)
+            response.raise_for_status()
+            
+            data = response.json()
+            
+            if "filings" not in data or "recent" not in data["filings"]:
+                return result
+            
+            recent = data["filings"]["recent"]
+            
+            # 10-K, 10-Q 각각 가장 최근 것 찾기
+            for target_form in ['10-K', '10-Q']:
+                for idx in range(len(recent["form"])):
+                    if recent["form"][idx] == target_form:
+                        filing_info = {
+                            "form": recent["form"][idx],
+                            "filed": recent["filingDate"][idx],
+                            "filed_date": recent["filingDate"][idx],
+                            "reporting_for": recent["reportDate"][idx] if recent.get("reportDate") and len(recent["reportDate"]) > idx else None,
+                            "filing_entity": data.get("name", ""),
+                            "accession_number": recent["accessionNumber"][idx],
+                            "cik": cik
+                        }
+                        
+                        # 파일 다운로드
+                        file_path = self.download_filing_file(
+                            cik=cik,
+                            accession_number=filing_info["accession_number"],
+                            form=target_form,
+                            file_format=file_format,
+                        )
+                        
+                        if file_path:
+                            if save_to_db:
+                                try:
+                                    metadata = {
+                                        "ticker": ticker.upper(),
+                                        "acceptance_date": filing_info.get("filed_date"),
+                                        "accession_number": filing_info.get("accession_number"),
+                                        "cik": cik,
+                                        "form": filing_info.get("form"),
+                                        "filed_date": filing_info.get("filed_date"),
+                                        "reporting_for": filing_info.get("reporting_for"),
+                                        "file_format": file_format,
+                                        "filing_entity": filing_info.get("filing_entity", ""),
+                                    }
+                                    database = db or SECDatabase()
+                                    database.save_filing(ticker, metadata, file_path)
+                                    print(f"✅ [{ticker}] {target_form} ({filing_info['filed_date']}) 저장 완료")
+                                except Exception as e:
+                                    print(f"❌ [{ticker}] {target_form} DB 저장 실패: {e}")
+                            
+                            result[target_form] = (filing_info, file_path)
+                        break  # 가장 최근 것 하나만
+            
+            return result
+            
+        except Exception as e:
+            print(f"10-K/10-Q 크롤링 중 오류: {e}")
+            return result
 
     def crawl_latest_filing(
         self,

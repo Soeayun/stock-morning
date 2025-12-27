@@ -26,28 +26,70 @@ class ConclusionParser:
             InvestmentConclusion 객체
         """
         try:
-            # 1. 점수 추출
+            # 1. JSON 블록 추출 시도 (우선)
+            json_data = self._extract_json_block(raw_text)
+            
+            if json_data:
+                # JSON 파싱 성공
+                scores_data = json_data.get("scores", {})
+                scores = Scores(
+                    fundamental=min(10, max(0, int(scores_data.get("fundamental", 5)))),
+                    risk=min(10, max(0, int(scores_data.get("risk", 5)))),
+                    growth=min(10, max(0, int(scores_data.get("growth", 5)))),
+                    sentiment=min(10, max(0, int(scores_data.get("sentiment", 5)))),
+                    overall=self._calculate_overall(scores_data)
+                )
+                
+                # 트리거 파싱
+                bullish = None
+                bearish = None
+                if json_data.get("bullish_trigger"):
+                    bullish = KeyTrigger(
+                        condition=json_data["bullish_trigger"],
+                        action="포지션 확대"
+                    )
+                if json_data.get("bearish_trigger"):
+                    bearish = KeyTrigger(
+                        condition=json_data["bearish_trigger"],
+                        action="손절 검토"
+                    )
+                
+                # 점수 이유 추출
+                score_reasons = []
+                if scores_data.get("fundamental_reason"):
+                    score_reasons.append(f"펀더멘털: {scores_data['fundamental_reason']}")
+                if scores_data.get("risk_reason"):
+                    score_reasons.append(f"리스크: {scores_data['risk_reason']}")
+                if scores_data.get("growth_reason"):
+                    score_reasons.append(f"성장: {scores_data['growth_reason']}")
+                if scores_data.get("sentiment_reason"):
+                    score_reasons.append(f"심리: {scores_data['sentiment_reason']}")
+                
+                return InvestmentConclusion(
+                    ticker=ticker,
+                    scores=scores,
+                    action=self._normalize_action(json_data.get("action", "HOLD")),
+                    position_size=min(20, max(0, int(json_data.get("position_size", 5)))),
+                    confidence=confidence,
+                    executive_summary=json_data.get("executive_summary", ""),
+                    key_debates=score_reasons,  # 점수 이유를 key_debates에 저장
+                    immediate_action=json_data.get("immediate_action"),
+                    short_term_strategy=json_data.get("short_term_strategy"),
+                    long_term_strategy=json_data.get("long_term_strategy"),
+                    bullish_trigger=bullish,
+                    bearish_trigger=bearish,
+                    raw_conclusion=raw_text
+                )
+            
+            # 2. JSON 파싱 실패 시 기존 정규식 방식 사용 (fallback)
+            print("⚠️  JSON 블록을 찾지 못해 정규식 파싱 시도...")
             scores = self._extract_scores(raw_text)
-            
-            # 2. 액션 추출
             action = self._extract_action(raw_text)
-            
-            # 3. 포지션 크기 추출
             position_size = self._extract_position_size(raw_text)
-            
-            # 4. Executive Summary 추출
             executive_summary = self._extract_executive_summary(raw_text)
-            
-            # 5. 주요 토론 쟁점 추출
             key_debates = self._extract_key_debates(raw_text)
-            
-            # 6. 실행 계획 추출
             immediate, short_term, long_term = self._extract_strategies(raw_text)
-            
-            # 7. 트리거 추출
             bullish, bearish = self._extract_triggers(raw_text)
-            
-            # 8. 재검토 항목 추출
             review_items = self._extract_review_items(raw_text)
             
             return InvestmentConclusion(
@@ -79,6 +121,51 @@ class ConclusionParser:
                 executive_summary="파싱 실패",
                 raw_conclusion=raw_text
             )
+    
+    def _extract_json_block(self, text: str) -> Optional[dict]:
+        """텍스트에서 JSON 블록 추출"""
+        # ```json ... ``` 블록 찾기
+        json_pattern = r'```json\s*(\{.*?\})\s*```'
+        match = re.search(json_pattern, text, re.DOTALL)
+        
+        if match:
+            try:
+                return json.loads(match.group(1))
+            except json.JSONDecodeError:
+                pass
+        
+        # { ... } 형태로 직접 찾기 (마지막 JSON 객체)
+        brace_pattern = r'\{[^{}]*"action"[^{}]*"scores"[^{}]*\{[^{}]*\}[^{}]*\}'
+        matches = re.findall(brace_pattern, text, re.DOTALL)
+        
+        for m in reversed(matches):
+            try:
+                return json.loads(m)
+            except json.JSONDecodeError:
+                continue
+        
+        return None
+    
+    def _normalize_action(self, action: str) -> str:
+        """액션 문자열 정규화"""
+        action_upper = action.upper().replace(" ", "_")
+        valid_actions = ["STRONG_BUY", "BUY", "HOLD", "SELL", "STRONG_SELL"]
+        if action_upper in valid_actions:
+            return action_upper
+        if "BUY" in action_upper:
+            return "BUY"
+        if "SELL" in action_upper:
+            return "SELL"
+        return "HOLD"
+    
+    def _calculate_overall(self, scores_data: dict) -> float:
+        """종합 점수 계산"""
+        f = scores_data.get("fundamental", 5)
+        r = scores_data.get("risk", 5)
+        g = scores_data.get("growth", 5)
+        s = scores_data.get("sentiment", 5)
+        # 가중평균: Fundamental 30%, Risk 역방향 20%, Growth 30%, Sentiment 20%
+        return round(f * 0.3 + (10 - r) * 0.2 + g * 0.3 + s * 0.2, 1)
     
     def _extract_scores(self, text: str) -> Scores:
         """점수 추출 (Fundamental, Risk, Growth, Sentiment)"""
