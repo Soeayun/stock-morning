@@ -36,6 +36,7 @@ class AgentState(TypedDict, total=False):
     
     # 중재자 분석 결과
     moderator_analysis: Dict[str, Any]
+    moderator_analyses: List[Dict[str, Any]]  # 각 라운드별 중재자 분석 저장
     key_agreements: List[str]
     key_disagreements: List[str]
     
@@ -175,8 +176,20 @@ def moderator_analysis_node(state: AgentState) -> AgentState:
             "guidance": analysis.get("guidance", {})
         })
     
+    # 중재자 분석 누적 저장 (JSON 출력용)
+    existing_analyses = list(state.get("moderator_analyses", []))
+    existing_analyses.append({
+        "round": current_round,
+        "key_agreements": analysis.get("key_agreements", []),
+        "key_disagreements": analysis.get("key_disagreements", []),
+        "needs_more_debate": needs_more,
+        "reason": reason,
+        "guidance": analysis.get("guidance", {})
+    })
+    
     new_state = dict(state)
     new_state["moderator_analysis"] = analysis
+    new_state["moderator_analyses"] = existing_analyses  # 누적 저장
     new_state["key_agreements"] = analysis.get("key_agreements", [])
     new_state["key_disagreements"] = analysis.get("key_disagreements", [])
     new_state["previous_moderator_guidance"] = new_previous_guidance  # 가이드 기록 저장

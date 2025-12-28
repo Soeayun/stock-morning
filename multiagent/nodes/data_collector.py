@@ -101,9 +101,10 @@ def prepare_ticker_dataset(
     initial_sentiment = results["sentiment"]
 
     # 5) 출처 정보 구성 (검증 에이전트용)
+    sec_filings_for_sources = sec_data.get("sec_filings", [])
     sources = _build_sources(
         ticker=ticker_upper,
-        sec_filings=sec_data.get("sec_filings", []),
+        sec_filings=sec_filings_for_sources,
         aws_news=aws_news,
         market_data=market_data,
     )

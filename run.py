@@ -128,6 +128,7 @@ def run_analysis(ticker: str, save: bool = False, output_dir: str = "data/agent_
             "ticker": ticker,
             "timestamp": timestamp,
             "rounds": result.get("rounds", []),
+            "moderator_analyses": result.get("moderator_analyses", []),  # 중재자 분석 (합의점, 쟁점, 가이드)
             "conclusion": result.get("conclusion", ""),
             "readable_summary": result.get("readable_summary", ""),
             "debate_transcript": result.get("debate_transcript", ""),
