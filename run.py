@@ -38,9 +38,9 @@ def parse_args():
         help="SEC 크롤링만 실행 (분석 생략)",
     )
     parser.add_argument(
-        "--save",
+        "--no-save",
         action="store_true",
-        help="결과를 JSON 파일로 저장",
+        help="결과 JSON 파일 저장 안 함 (기본: 저장)",
     )
     parser.add_argument(
         "--output-dir",
@@ -131,6 +131,7 @@ def run_analysis(ticker: str, save: bool = False, output_dir: str = "data/agent_
             "conclusion": result.get("conclusion", ""),
             "readable_summary": result.get("readable_summary", ""),
             "debate_transcript": result.get("debate_transcript", ""),
+            "sources": result.get("sources", {}),  # 검증 에이전트용 출처 정보
         }
         
         if structured_conclusion:
@@ -162,10 +163,11 @@ def main():
     
     # 2단계: 전문가 토론 분석
     if not args.crawl_only:
-        result = run_analysis(ticker, save=args.save, output_dir=args.output_dir)
+        save = not args.no_save  # 기본: 저장, --no-save 시 저장 안 함
+        result = run_analysis(ticker, save=save, output_dir=args.output_dir)
         
-        # 3단계: 임시 뉴스 파일 정리
-        cleanup_temp_files(ticker)
+        # 3단계: 사용하지 않은 파일만 삭제 (검증용 데이터 유지)
+        cleanup_unused_files(ticker, result)
     else:
         print("\n⏭️  분석 생략 (--crawl-only)")
         result = None
@@ -179,18 +181,56 @@ def main():
     return result
 
 
-def cleanup_temp_files(ticker: str):
-    """분석 완료 후 임시 뉴스 파일 정리"""
+def cleanup_unused_files(ticker: str, result: dict):
+    """임시 파일 정리 (뉴스 전체 삭제 - pk로 DynamoDB 재조회 가능)"""
     import shutil
     
+    sources = result.get("sources", {})
+    
+    # 1. 뉴스 파일 전체 삭제 (검증 에이전트는 pk로 DynamoDB 직접 조회)
     aws_results_dir = Path("aws_results")
     if aws_results_dir.exists():
-        # 해당 티커의 뉴스 파일만 삭제
         ticker_files = list(aws_results_dir.glob(f"{ticker}_*.json"))
+        for f in ticker_files:
+            f.unlink()
         if ticker_files:
-            for f in ticker_files:
+            print(f"\n🧹 뉴스 임시 파일 삭제: {len(ticker_files)}개")
+    
+    # 2. SEC 파일 정리: sources에 있는 파일 + 10-K/10-Q는 항상 유지
+    sec_dir = Path("downloads/sec_filings")
+    if sec_dir.exists():
+        # 새 sources 구조: sources["sources"] 배열에서 type="sec_filing" 추출
+        all_sources = sources.get("sources", [])
+        used_accessions = set()
+        for item in all_sources:
+            if item.get("type") == "sec_filing":
+                acc = item.get("accession_number", "")
+                if acc:
+                    # 0001652044-25-000014 -> 000165204425000014
+                    used_accessions.add(acc.replace("-", ""))
+        
+        kept_count = 0
+        deleted_count = 0
+        
+        for f in sec_dir.glob(f"*{ticker}*") if ticker else sec_dir.glob("*.xml"):
+            stem = f.stem
+            
+            # 10-K/10-Q는 항상 유지 (FilingSummary.xml 포함)
+            if "FilingSummary" in stem:
+                kept_count += 1
+                continue
+            
+            # sources에 있는 파일만 유지
+            is_used = any(acc in stem for acc in used_accessions)
+            
+            if is_used:
+                kept_count += 1
+            else:
                 f.unlink()
-            print(f"\n🧹 임시 파일 정리: {len(ticker_files)}개 뉴스 파일 삭제")
+                deleted_count += 1
+        
+        if kept_count > 0 or deleted_count > 0:
+            print(f"🧹 SEC 파일 정리: {kept_count}개 유지, {deleted_count}개 삭제")
 
 
 if __name__ == "__main__":

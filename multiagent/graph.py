@@ -45,6 +45,9 @@ class AgentState(TypedDict, total=False):
     # 뉴스 캐시 (중복 호출 방지)
     news_cache: Dict[int, str]
     
+    # 출처 정보 (검증 에이전트용)
+    sources: Dict[str, Any]
+    
     should_continue: bool
     debate_transcript: str
     conclusion: str
@@ -103,8 +106,9 @@ def collect_data_node(state: AgentState) -> AgentState:
         "sentiment_statement": info["initial_sentiment"],
         "key_agreements": [],
         "key_disagreements": [],
-        "previous_moderator_guidance": [],  # 중재자 이전 가이드 기록
-        "news_cache": {},  # 뉴스 캐시 (중복 호출 방지)
+        "previous_moderator_guidance": [],
+        "news_cache": {},
+        "sources": info.get("sources", {}),  # 출처 정보 (검증 에이전트용)
         "should_continue": True,
     }
 
@@ -392,6 +396,29 @@ def conclusion_node(state: AgentState) -> AgentState:
     print("📊 한눈에 보는 결론")
     print("=" * 100)
     print(readable_summary)
+    
+    # 출처 정보 출력
+    sources = state.get("sources", {})
+    if sources:
+        print("\n" + "-" * 100)
+        print("📚 참고 자료 (검증용)")
+        print("-" * 100)
+        
+        # type별 카운트
+        all_sources = sources.get("sources", [])
+        sec_items = [s for s in all_sources if s.get("type") == "sec_filing"]
+        news_items = [s for s in all_sources if s.get("type") == "article"]
+        chart_items = [s for s in all_sources if s.get("type") == "chart"]
+        
+        print(f"  • SEC 공시: {len(sec_items)}건")
+        for f in sec_items[:3]:
+            print(f"    - {f.get('form')} ({f.get('filed_date')})")
+        print(f"  • 뉴스 기사: {len(news_items)}건")
+        for n in news_items[:3]:
+            print(f"    - {n.get('title', '')[:50]}...")
+        if chart_items:
+            chart = chart_items[0]
+            print(f"  • 시장 데이터: yfinance (${chart.get('current_price', 'N/A')})")
     
     new_state = dict(state)
     new_state["conclusion"] = conclusion_text

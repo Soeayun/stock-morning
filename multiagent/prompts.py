@@ -291,6 +291,10 @@ GUIDED_DEBATE_PROMPT = """
 **당신이 가진 데이터:**
 {your_data}
 
+**도구 사용:**
+- 뉴스 헤드라인의 상세 내용이 필요하면 `get_news_detail(news_id=번호)` 도구를 호출하세요
+- 도구 호출 예시: get_news_detail(news_id=3)
+
 ---
 
 **당신의 임무:**

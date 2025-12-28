@@ -1,7 +1,7 @@
 # 📊 Stock Morning 데이터 수집 상세 문서
 
-> 작성일: 2024-12-27  
-> 버전: 2.0
+> 작성일: 2024-12-28  
+> 버전: 2.2
 
 ---
 
@@ -11,25 +11,25 @@ Stock Morning 시스템은 **3가지 데이터 소스**에서 주식 분석에 �
 
 | 데이터 소스 | 수집 방법 | 저장 위치 | 수집 내용 |
 |------------|----------|----------|----------|
-| **SEC EDGAR** | REST API | SQLite + 로컬 파일 | 10-K, 10-Q, 8-K, Form 4 등 공시 문서 |
-| **Yahoo Finance 뉴스** | AWS (DynamoDB) | 메모리 (임시 파일) | 기업 관련 뉴스 기사 |
+| **SEC EDGAR** | REST API | SQLite + 로컬 파일 | 10-K, 10-Q (항상), 8-K, Form 4 (윈도우 내) |
+| **Yahoo Finance 뉴스** | AWS (DynamoDB) | 임시 파일 → 분석 후 삭제 | 기업 관련 뉴스 기사 |
 | **실시간 시장 데이터** | yfinance | 메모리 | 주가, P/E, 시가총액 등 30+ 지표 |
 
 ---
 
 ## 2. 실행 스크립트
 
-### `run.py` - 통합 실행 스크립트 (권장)
+### `run.py` - 통합 실행 스크립트
 
 ```bash
-# 전체 파이프라인 (크롤링 + 분석)
+# 전체 파이프라인 (크롤링 + 분석 + JSON 저장)
 uv run run.py --ticker GOOG
 
 # 크롤링 생략 (기존 데이터 사용)
 uv run run.py --ticker GOOG --skip-crawl
 
-# 결과 JSON 저장
-uv run run.py --ticker GOOG --save
+# 결과 JSON 저장 안 함
+uv run run.py --ticker GOOG --no-save
 ```
 
 **실행 순서:**
@@ -37,31 +37,54 @@ uv run run.py --ticker GOOG --save
 run.py
 ├── run_crawling()                    # 1단계: SEC 크롤링
 │   ├── SECCrawler.crawl_filings_in_window()
-│   │   └── 최근 N일 공시 다운로드
+│   │   └── 최근 N일 공시 다운로드 (기본 90일)
 │   ├── SECCrawler.crawl_latest_annual_quarterly()
 │   │   └── 10-K, 10-Q 항상 포함 (기간 무관)
 │   └── SQLite DB + 로컬 파일 저장
 │
 ├── run_analysis()                    # 2단계: 4명 전문가 토론
 │   └── run_multiagent_pipeline(ticker)
-│       ├── collect_data_node         # 데이터 수집
+│       ├── collect_data_node         # 데이터 수집 + sources 생성
 │       ├── moderator_analysis_node   # 중재자 분석
 │       ├── guided_debate_node (x3)   # 토론 라운드
-│       └── conclusion_node           # 최종 결론
+│       └── conclusion_node           # 최종 결론 + sources 출력
 │
-└── cleanup_temp_files()              # 3단계: 임시 파일 정리
-    └── aws_results/{TICKER}_*.json 삭제
+└── cleanup_unused_files()            # 3단계: 파일 정리
+    ├── 뉴스 임시 파일 전체 삭제 (pk로 DynamoDB 재조회 가능)
+    └── SEC 파일: 10-K/10-Q + sources 포함 파일 유지
 ```
 
 ---
 
-## 3. 데이터 소스별 상세 설명
+## 3. 데이터 수집 윈도우
 
-### 3.1 SEC EDGAR 공시 수집
+### 크롤러 vs 분석기 윈도우
+
+| 구분 | 크롤러 | 분석기 (data_fetcher) |
+|------|--------|---------------------|
+| 기본값 | 90일 | `SEC_CRAWLER_WINDOW_DAYS` 또는 24시간 |
+| 10-K/10-Q | 항상 포함 | 항상 포함 |
+| Form 4 등 | 윈도우 내 | 윈도우 내 |
+
+### 예시
+
+```
+오늘: 2025-12-28
+윈도우: 24시간
+
+사용 가능:
+✅ 10-K (2025-02-05) - 항상 포함
+✅ 10-Q (2025-10-30) - 항상 포함
+❌ Form 4 (2025-12-18) - 24시간 외
+```
+
+---
+
+## 4. SEC EDGAR 공시 수집
 
 **파일:** `src/sec_crawler.py`
 
-#### 수집 과정
+### 수집 과정
 
 ```
 1. 티커 → CIK 변환
@@ -70,7 +93,7 @@ run.py
 
 2. 공시 목록 조회
    GET https://data.sec.gov/submissions/CIK{CIK}.json
-   - 기본 윈도우: 10일 (SEC_CRAWLER_WINDOW_DAYS 환경변수)
+   - 기본 윈도우: 90일 (SEC_CRAWLER_WINDOW_DAYS 환경변수)
    - 10-K, 10-Q는 기간 무관하게 최신 1건 항상 포함
 
 3. 공시 파일 다운로드
@@ -82,7 +105,7 @@ run.py
    - 메타데이터: sec_filings.db (SQLite)
 ```
 
-#### 10-K/10-Q 항상 포함
+### 10-K/10-Q 항상 포함
 
 ```python
 # src/sec_crawler.py
@@ -92,142 +115,103 @@ def crawl_latest_annual_quarterly(self, ticker: str):
     # 최신 10-Q 1건
 ```
 
-이 기능으로 인해 분석 시 항상 연간/분기 보고서가 포함됩니다.
-
-#### 저장되는 메타데이터 (SQLite)
-
-```sql
-CREATE TABLE filings (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ticker VARCHAR(10) NOT NULL,
-    cik VARCHAR(10) NOT NULL,
-    accession_number VARCHAR(50) UNIQUE,
-    form VARCHAR(20) NOT NULL,          -- 10-K, 10-Q, 8-K, 4 등
-    filed_date DATE NOT NULL,           -- 제출일 (LLM 인용에 사용)
-    reporting_for DATE,                 -- 보고 기준일
-    file_path VARCHAR(500),
-    file_format VARCHAR(10),
-    created_at TIMESTAMP
-);
-```
-
----
-
-### 3.2 Yahoo Finance 뉴스 수집 (AWS)
-
-**파일:** `aws_fetchers/yahoo_fetcher.py`, `aws_fetchers/news_saver.py`
-
-#### AWS 리소스
-
-| 서비스 | 리소스명 | 용도 |
-|--------|---------|------|
-| **DynamoDB** | `kubig-YahoofinanceNews` | 뉴스 메타데이터 + 본문 |
-
-#### 수집 과정
-
-```
-1. DynamoDB Query
-   - FilterExpression: tickers.contains(ticker)
-   - 최신순 정렬, 상위 10건
-
-2. 로컬 임시 저장
-   - 경로: aws_results/{TICKER}_{TIMESTAMP}_{INDEX}.json
-   - 파이프라인 완료 후 자동 삭제
-
-3. 뉴스 상세 조회 (토론 중)
-   - get_news_detail 도구로 상세 내용 조회
-   - 메모리 캐시 (news_cache) 사용
-```
-
-#### 반환 데이터 구조
-
 ```python
-{
-    "pk": "article-unique-id",
-    "ticker": "GOOG",
-    "published_at": "2025-12-23T10:30:00Z",
-    "title": "Google started the year behind in the AI race...",
-    "article_raw": "원문 내용..."
-}
+# src/database/data_fetcher.py
+# 4. 가장 최근 10-K, 10-Q는 항상 포함 (기간과 관계없이)
+latest_annuals = self.db.get_latest_annual_quarterly(ticker)
+for form_type in ['10-K', '10-Q']:
+    filing = latest_annuals.get(form_type)
+    if filing and filing.get('accession_number') not in existing_accession:
+        sec_metadata.insert(0, filing)  # 맨 앞에 추가
 ```
 
 ---
 
-### 3.3 실시간 시장 데이터 (yfinance)
+## 5. 출처 정보 (Sources) - 검증 에이전트용
 
-**파일:** `multiagent/services/market_data.py`
-
-#### 수집 항목 (30+ 지표)
-
-**주가 정보:**
-| 지표 | 설명 | 예시 |
-|------|------|------|
-| `current_price` | 현재 주가 | $314.96 |
-| `market_cap` | 시가총액 | $2.1T |
-| `fifty_two_week_high` | 52주 최고가 | $328.50 |
-| `fifty_two_week_low` | 52주 최저가 | $244.58 |
-| `volume` | 거래량 | 25,000,000 |
-
-**밸류에이션 지표:**
-| 지표 | 설명 | 예시 |
-|------|------|------|
-| `pe_ratio` | P/E Ratio (TTM) | 31.06 |
-| `forward_pe` | Forward P/E | 28.11 |
-| `price_to_book` | P/B Ratio | 6.8 |
-
-**수익성 지표:**
-| 지표 | 설명 | 예시 |
-|------|------|------|
-| `operating_margin` | 영업이익률 | 30.5% |
-| `profit_margin` | 순이익률 | 32.2% |
-| `roe` | 자기자본이익률 | 28% |
-
-**재무 건전성:**
-| 지표 | 설명 | 예시 |
-|------|------|------|
-| `debt_to_equity` | 부채비율 | 11.42 |
-| `free_cash_flow` | 잉여현금흐름 | $48B |
-
----
-
-## 4. 데이터 통합 및 Agent 전달
+### 생성 위치
 
 **파일:** `multiagent/nodes/data_collector.py`
 
-### `prepare_ticker_dataset()` 함수
+```python
+def _build_sources(ticker, sec_filings, aws_news, market_data) -> Dict:
+    """검증 에이전트를 위한 출처 정보 구성 (20251222.json 형식)"""
+```
+
+### Sources 스키마 (새 형식)
+
+```json
+{
+  "sources": {
+    "ticker": "GOOG",
+    "collected_at": "2025-12-28T06:43:00+00:00",
+    "sources": [
+      {
+        "type": "sec_filing",
+        "form": "10-Q",
+        "filed_date": "2025-10-30",
+        "reporting_for": "2025-09-30",
+        "accession_number": "0001652044-25-000091",
+        "file_path": "downloads/sec_filings/0001652044_000165204425000091_FilingSummary.xml"
+      },
+      {
+        "type": "sec_filing",
+        "form": "10-K",
+        "filed_date": "2025-02-05",
+        "reporting_for": "2024-12-31",
+        "accession_number": "0001652044-25-000014",
+        "file_path": "downloads/sec_filings/0001652044_000165204425000014_FilingSummary.xml"
+      },
+      {
+        "type": "article",
+        "pk": "id#e3faffb...",
+        "title": "Google started the year behind in the AI race..."
+      },
+      {
+        "type": "chart",
+        "ticker": "GOOG",
+        "source": "yfinance",
+        "current_price": 314.96,
+        "pe_ratio": 31.06,
+        "market_cap": 1950000000000
+      }
+    ]
+  }
+}
+```
+
+### 저장 위치
+
+`data/agent_results/{TICKER}_{TIMESTAMP}_debate.json`
+
+---
+
+## 6. 파일 정리 로직
+
+**파일:** `run.py` - `cleanup_unused_files()`
+
+### 정리 규칙
+
+| 파일 유형 | 정리 정책 |
+|----------|----------|
+| **뉴스 파일** | 분석 후 전체 삭제 (pk로 DynamoDB 재조회 가능) |
+| **10-K/10-Q** | 항상 유지 (FilingSummary.xml) |
+| **기타 SEC** | sources에 있으면 유지 |
 
 ```python
-def prepare_ticker_dataset(ticker: str, hours: int = 24, news_limit: int = 10):
-    """
-    3가지 데이터 소스를 통합하여 Agent에게 전달할 데이터셋 생성
-    """
-    
-    # 1. AWS 뉴스 수집
-    yahoo_fetcher = YahooNewsFetcher()
-    aws_news = yahoo_fetcher.fetch(ticker, limit=news_limit)
-    
-    # 2. 로컬 SEC 데이터 조회 (10-K, 10-Q 항상 포함)
-    fetcher = DataFetcher()
-    sec_data = fetcher.fetch_ticker_data(ticker)
-    # → has_10k, has_10q 플래그 확인
-    
-    # 3. 실시간 시장 데이터
-    market_fetcher = MarketDataFetcher()
-    market_data = market_fetcher.fetch_market_data(ticker)
-    
-    return {
-        "ticker": ticker,
-        "aws_news": aws_news,
-        "sec_filings": sec_data["filings"],
-        "market_data": market_data,
-        "has_10k": sec_data.get("has_10k", False),
-        "has_10q": sec_data.get("has_10q", False),
-    }
+# 뉴스 임시 파일 전체 삭제
+for f in ticker_files:
+    f.unlink()
+
+# 10-K/10-Q는 항상 유지
+if "FilingSummary" in stem:
+    kept_count += 1
+    continue
 ```
 
 ---
 
-## 5. 4명 전문가 토론 시스템
+## 7. 4명 전문가 토론 시스템
 
 ### 전문가 페르소나
 
@@ -245,26 +229,35 @@ Round 1: Blind Analysis
 ├── 4명 전문가 독립 분석 (병렬)
 └── 중재자: 합의점/쟁점 정리
 
-Round 2-3: Guided Debate
+Round 2-4: Guided Debate
 ├── 중재자 가이드 기반 데이터 중심 토론
-├── Sentiment Analyst: get_news_detail 도구 사용 가능
+├── 모든 전문가: get_news_detail 도구 사용 가능
 └── 중재자: 추가 토론 필요 여부 판단
 
 Final: Conclusion
-└── 팟캐스트 대본 + 구조화된 분석 + JSON
+├── 팟캐스트 대본 (줄글)
+├── 구조화된 분석 (JSON)
+└── sources 출력 (검증용)
+```
+
+### 뉴스 도구 (모든 에이전트)
+
+```python
+# 모든 전문가가 뉴스 상세 조회 가능
+get_news_detail(news_id=8)
+→ "Google started the year behind in the AI race..."
 ```
 
 ---
 
-## 6. 최종 출력 형식
+## 8. 최종 출력 형식
 
 ### 팟캐스트 대본 (줄글)
 
 ```
 오늘 분석한 구글(Alphabet Inc.)에 대해 최종 결론을 말씀드리겠습니다.
 최근 제출된 10-Q(2025-10-30)에 따르면 영업이익률이 30%를 유지하고 있고
-약 480억 달러의 현금흐름을 기록했습니다. 또한 12월 23일 보도된 뉴스에서는
-AI 경쟁력이 크게 회복되었다는 내용이 있었습니다...
+약 480억 달러의 현금흐름을 기록했습니다...
 ```
 
 **특징:**
@@ -277,19 +270,19 @@ AI 경쟁력이 크게 회복되었다는 내용이 있었습니다...
 ```json
 {
   "action": "BUY/HOLD/SELL",
-  "position_size": 5,
+  "position_size": 10,
   "debate_summary": "...",
   "buy_reasons": ["근거1 (출처, 날짜)", ...],
   "risk_factors": ["리스크1", ...],
-  "immediate_action": "이번 주 $310-320 구간에서 5% 매수",
-  "short_term_strategy": "3개월 내 Cloud YoY >25% 시 3% 추가",
-  "long_term_strategy": "목표가 $380, 총 포지션 10%"
+  "immediate_action": "...",
+  "short_term_strategy": "...",
+  "long_term_strategy": "..."
 }
 ```
 
 ---
 
-## 7. 환경 설정
+## 9. 환경 설정
 
 ### 필수 환경변수 (.env)
 
@@ -308,12 +301,12 @@ LANGCHAIN_PROJECT=stock-morning
 LANGCHAIN_API_KEY=...
 
 # SEC 크롤러 설정 (선택)
-SEC_CRAWLER_WINDOW_DAYS=10  # 기본값: 10일 (10-K/10-Q는 무관)
+SEC_CRAWLER_WINDOW_DAYS=90  # 기본값: 90일 (10-K/10-Q는 무관)
 ```
 
 ---
 
-## 8. 파일 구조
+## 10. 파일 구조
 
 ```
 stock-morning/
@@ -321,6 +314,8 @@ stock-morning/
 │
 ├── multiagent/                       # 4명 전문가 토론 시스템
 │   ├── graph.py                      # LangGraph 파이프라인
+│   ├── nodes/
+│   │   └── data_collector.py         # 데이터 수집 + sources 생성
 │   ├── agents/
 │   │   ├── fundamental_analyst.py
 │   │   ├── risk_manager.py
@@ -328,30 +323,29 @@ stock-morning/
 │   │   ├── sentiment_analyst.py
 │   │   └── moderator.py
 │   ├── services/
-│   │   ├── toolkit.py                # GPT-5.1 API (chat_json 포함)
-│   │   ├── market_data.py
+│   │   ├── toolkit.py                # GPT-5.1 API
 │   │   └── conclusion_parser.py
-│   ├── prompts.py
+│   ├── prompts.py                    # 프롬프트 (모든 에이전트 뉴스 도구 포함)
 │   └── schemas.py
 │
 ├── src/                              # 데이터 수집
 │   ├── sec_crawler.py                # SEC 크롤러 (10-K/10-Q 항상 포함)
 │   ├── db.py                         # SQLite (get_latest_annual_quarterly)
-│   ├── database/data_fetcher.py
-│   └── config/settings.py
+│   └── database/data_fetcher.py      # 데이터 조회 (10-K/10-Q 항상 포함)
 │
 ├── aws_fetchers/                     # AWS 뉴스 수집
 │   ├── yahoo_fetcher.py
 │   └── news_saver.py
 │
-├── config/tickers.json               # 티커 설정
-├── downloads/sec_filings/            # SEC 원문 파일
-└── sec_filings.db                    # SQLite DB
+├── downloads/sec_filings/            # SEC 원문 파일 (영구 저장)
+├── aws_results/                      # 뉴스 임시 파일 (분석 후 삭제)
+├── sec_filings.db                    # SQLite DB
+└── data/agent_results/               # 결과 JSON (sources 포함)
 ```
 
 ---
 
-## 9. 실행 예시
+## 11. 실행 예시
 
 ```bash
 # 전체 파이프라인
@@ -365,23 +359,28 @@ uv run run.py --ticker GOOG
 📊 Ticker: GOOG
 ====================================================================================================
 
-📥 SEC 크롤링: 16건 (10-K: ✅, 10-Q: ✅)
+📥 SEC 크롤링: 7건 (10-K: ✅, 10-Q: ✅)
 ✅ 뉴스 수집: 10건
 💰 현재 주가: $314.96
 
 🎯 4-EXPERT DEBATE PIPELINE
 ├── Round 1: Blind Analysis
-├── Round 2: Guided Debate
-├── Round 3: Guided Debate
+├── Round 2-4: Guided Debate
 └── Final: 결론 도출
 
 📋 FINAL CONCLUSION
 ────────────────────────────────────────
-오늘 분석한 구글(Alphabet Inc.)에 대해 최종 결론을 말씀드리겠습니다...
+🔵 최종 판단: BUY
+추천 포지션: 10%
 ────────────────────────────────────────
 
-⚪ 최종 판단: HOLD (5%)
-🧹 임시 파일 정리: 10개 삭제
+📚 참고 자료 (검증용)
+  • SEC 공시: 7건 - 10-Q (2025-10-30), 10-K (2025-02-05)
+  • 뉴스 기사: 10건
+  • 시장 데이터: yfinance ($314.96)
+
+💾 결과 저장 완료: data/agent_results/GOOG_20251228_154422_debate.json
+🧹 뉴스 임시 파일 삭제: 10개
 
 ✨ PIPELINE COMPLETED (약 2분)
 ```

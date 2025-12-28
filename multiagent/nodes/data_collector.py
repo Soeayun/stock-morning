@@ -100,10 +100,65 @@ def prepare_ticker_dataset(
     initial_growth = results["growth"]
     initial_sentiment = results["sentiment"]
 
+    # 5) 출처 정보 구성 (검증 에이전트용)
+    sources = _build_sources(
+        ticker=ticker_upper,
+        sec_filings=sec_data.get("sec_filings", []),
+        aws_news=aws_news,
+        market_data=market_data,
+    )
+
     return {
         "dataset": dataset,
         "initial_fundamental": initial_fundamental,
         "initial_risk": initial_risk,
         "initial_growth": initial_growth,
         "initial_sentiment": initial_sentiment,
+        "sources": sources,
     }
+
+
+def _build_sources(ticker: str, sec_filings: list, aws_news: list, market_data) -> Dict:
+    """검증 에이전트를 위한 출처 정보 구성 (20251222.json 형식)"""
+    from datetime import datetime, timezone
+    
+    sources = {
+        "ticker": ticker,
+        "collected_at": datetime.now(timezone.utc).isoformat(),
+        "sources": [],  # 모든 출처를 단일 배열로 (type으로 구분)
+    }
+    
+    # SEC 공시 출처
+    for filing in sec_filings or []:
+        meta = filing.get("metadata", {})
+        sources["sources"].append({
+            "type": "sec_filing",
+            "form": meta.get("form"),
+            "filed_date": meta.get("filed_date"),
+            "reporting_for": meta.get("reporting_for"),
+            "accession_number": meta.get("accession_number"),
+            "file_path": meta.get("file_path"),
+        })
+    
+    # 뉴스 기사 출처 (pk 형식)
+    for news in aws_news or []:
+        pk = news.get("pk") or news.get("id") or ""
+        sources["sources"].append({
+            "type": "article",
+            "pk": pk,
+            "title": news.get("title", "")[:100],
+        })
+    
+    # 시장 데이터 출처 (차트 형식)
+    if market_data:
+        today = datetime.now().strftime("%Y-%m-%d")
+        sources["sources"].append({
+            "type": "chart",
+            "ticker": ticker,
+            "source": "yfinance",
+            "current_price": getattr(market_data, "current_price", None),
+            "pe_ratio": getattr(market_data, "pe_ratio", None),
+            "market_cap": getattr(market_data, "market_cap", None),
+        })
+    
+    return sources

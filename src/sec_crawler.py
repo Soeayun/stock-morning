@@ -263,7 +263,7 @@ class SECCrawler:
                     if response.status_code == 200:
                         # 파일 저장
                         download_dir = Path("downloads/sec_filings")
-                        download_dir.mkdir(exist_ok=True)
+                        download_dir.mkdir(parents=True, exist_ok=True)
                         
                         file_path = download_dir / f"{cik}_{accession_no_dash}_{filename}"
                         file_path.write_bytes(response.content)
